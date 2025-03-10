@@ -1,18 +1,26 @@
 import torch
 import torch.nn as nn
-from torchvision.models import resnet34
+from torchvision.models import resnet34, resnet50
 from tqdm import tqdm
 
-class Resnet_34(nn.Module):
-    def __init__(self, args=None, num_classes=100):
+class Resnet_50(nn.Module):
+    def __init__(self, args=None, num_classes=100, lr=1e-3, weight_decay=1e-4):
         super().__init__()
 
-        self.model = resnet34(pretrained=True)
-        in_features = self.model.fc.in_features  # 獲取 ResNet34 原始 fc 層的輸入維度 (512)
-        self.model.fc = nn.Linear(in_features, num_classes)  # 替換原本的 fc 層
+        self.model = resnet50(pretrained=True)
+        in_features = self.model.fc.in_features  # get the number of in_features of original fc layer
+        # self.model.fc = nn.Linear(in_features, num_classes)  # replace the fc layer
+        self.model.fc = nn.Sequential(
+            nn.Dropout(p=0.5), 
+            nn.Linear(in_features, num_classes)
+        )
         
+        self.lr = lr
+        self.weight_decay = weight_decay
+
         self.loss_fn = nn.CrossEntropyLoss()
         self.args = args
+
 
         # 設置 optimizer 和 scheduler
         self.optim, self.scheduler = self.configure_optimizers()
@@ -30,20 +38,17 @@ class Resnet_34(nn.Module):
 
             self.optim.zero_grad()
             pred = self.forward(img)
-            # 計算 loss
+
+            # calculate loss and backpropagate
             loss = self.loss_fn(pred, label)
             loss.backward()
             self.optim.step()
             total_loss += loss.item()
 
-            # 獲取當前學習率
+            # get current learning rate and update tqdm
             lr = self.optim.param_groups[0]['lr']
-            
-            # 更新 tqdm 進度條
             pbar.set_postfix(loss=loss.item(), lr=lr)
 
-        # 根據 loss 更新 scheduler
-        self.scheduler.step(total_loss / len(data_loader))
         return total_loss / len(data_loader)
 
     def eval_one_epoch(self, data_loader, epoch):
@@ -61,15 +66,19 @@ class Resnet_34(nn.Module):
                 loss = self.loss_fn(pred, label)
                 total_loss += loss.item()
 
+                # get prediction and calculate accuracy
                 acc = (pred.argmax(dim=1) == label).float().mean().item()
                 total_acc += acc
 
                 lr = self.optim.param_groups[0]['lr']
                 pbar.set_postfix(loss=loss.item(), lr=lr, acc=acc)
 
+        # update scheduler
+        self.scheduler.step(total_loss / len(data_loader))
+
         return total_loss / len(data_loader), total_acc / len(data_loader)
             
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.0001, betas=(0.9, 0.96), weight_decay=4.5e-2)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, min_lr=1e-6, factor=0.1, patience=2)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, betas=(0.9, 0.96), weight_decay=self.weight_decay)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, min_lr=1e-6, factor=0.8, patience=2)
         return optimizer, scheduler

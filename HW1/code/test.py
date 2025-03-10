@@ -38,10 +38,10 @@ if __name__ == '__main__':
     # set seed
     setup_seed(118)
 
-    test_dataset = utils.TestDataset(path=args.test_path)
+    test_dataset = utils.TestDataset(data_dir=args.test_path)
     test_loader = DataLoader(test_dataset, batch_size=args.bs, shuffle=False)
 
-    myModel = model.Resnet_34(num_classes=args.num_classes)
+    myModel = model.Resnet_50(num_classes=args.num_classes)
     myModel.to(args.device)
     myModel.eval()
     myModel.load_state_dict(torch.load(args.ckpt_path))

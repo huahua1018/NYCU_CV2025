@@ -1,29 +1,23 @@
 import os
-import torch
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, Dataset
+from torchvision import transforms
+from torch.utils.data import Dataset
 import matplotlib.pyplot as plt
 import numpy as np
-
-
-from torch.utils.data import Dataset
 from PIL import Image
-import os
 
-class CustomImageDataset(Dataset):
-    def __init__(self, image_dir, transform=None):
-        self.image_dir = image_dir
+class TrainDataset(Dataset):
+    def __init__(self, data_dir, transform=None):
+        self.data_dir = data_dir
         self.transform = transform
         self.image_paths = []
         self.labels = []
         
-        # 遍歷資料夾，獲取所有圖片檔案及其標籤
-        for label in os.listdir(image_dir):
-            label_path = os.path.join(image_dir, label)
-            if os.path.isdir(label_path):
-                for img_name in os.listdir(label_path):
-                    self.image_paths.append(os.path.join(label_path, img_name))
-                    self.labels.append(int(label))  # 假設標籤是資料夾名稱
+        # Traverse all the files in the image_dir
+        for label in os.listdir(data_dir):
+            label_path = os.path.join(data_dir, label) 
+            for img_name in os.listdir(label_path):
+                self.image_paths.append(os.path.join(label_path, img_name))
+                self.labels.append(int(label))  # turn the label name into integer
 
     def __len__(self):
         return len(self.image_paths)
@@ -39,10 +33,11 @@ class CustomImageDataset(Dataset):
         return image, label
     
 class TestDataset(Dataset):
-    def __init__(self, path):
-        self.path = path
-        self.image_paths = sorted(os.listdir(path))  # 確保讀取順序
+    def __init__(self, data_dir):
+        self.data_dir = data_dir
+        self.image_paths = os.listdir(data_dir)
         self.transform = transforms.Compose([
+            transforms.Resize((224, 224)), # same as the validation set, otherwise the performance will be bad
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
@@ -51,13 +46,12 @@ class TestDataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        img_path = os.path.join(self.path, self.image_paths[idx])
+        img_path = os.path.join(self.data_dir, self.image_paths[idx])
         image = Image.open(img_path).convert("RGB")
         image = self.transform(image)
-        return image, self.image_paths[idx]  # 回傳影像 + 檔名
+        return image, self.image_paths[idx]  # return img, img name
     
 
-# 創建資料夾的函式
 def create_folder_if_not_exists(folder_path):
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
