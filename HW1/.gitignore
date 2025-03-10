@@ -1,0 +1,6 @@
+checkpoints/*
+img/*
+data/*
+*.csv
+*.zip
+__pycache__/
