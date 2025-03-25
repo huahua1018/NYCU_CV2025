@@ -389,9 +389,6 @@ class Resnext_101_32(nn.Module):
         self.layer4 = self.resnext.layer4
 
         # 加入 CBAM
-        self.cbam1 = CBAM(in_planes=256)
-        self.cbam2 = CBAM(in_planes=512)
-        self.cbam3 = CBAM(in_planes=1024)
         self.cbam4 = CBAM(in_planes=2048)
 
         # doropout
@@ -411,34 +408,21 @@ class Resnext_101_32(nn.Module):
         self.optim, self.scheduler = self.configure_optimizers()
 
     def forward(self, x):
-        # 輸入第一層
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
 
-        # Layer1
         x = self.layer1(x)
-        # x = self.cbam1(x)  # 加入 CBAM
-        # x = self.dropout(x)
-
-        # Layer2
         x = self.layer2(x)
-        # x = self.cbam2(x)  # 加入 CBAM
-        # x = self.dropout(x)
 
-        # Layer3
         x = self.layer3(x)
-        # x = self.cbam3(x)  # 加入 CBAM
-        # x = self.dropout(x)
+        x = self.dropout(x)
 
-
-        # Layer4
         x = self.layer4(x)
-        x = self.cbam4(x)  # 加入 CBAM
+        x = self.cbam4(x) # use CBAM
 
-
-        # 最後全連接層
+        # FC layer
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
