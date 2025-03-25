@@ -26,7 +26,6 @@ if __name__ == '__main__':
 
     parser.add_argument('--test_path', type=str, default="../data/test/", help='Training Dataset Path')
     parser.add_argument('--ckpt_path', type=str, default='../checkpoints/model_Resnext101_32_pre12+last2CBAM+layer3lessdropout+coloraug+randmixup_bs_32_epochs_50_lr_0.0001_wd_0.045_factor_0.1_act_ReLU_minlr_1e-06_mixup_0.2/best.pt', help='Path to checkpoint file.')
-    parser.add_argument('--img_path', type=str, default='../img/test/', help='Path to save the image.')
     parser.add_argument('--csv_path', type=str, default='../prediction.csv', help='Path to save the prediction csv.')
     parser.add_argument('--zip_path', type=str, default='../submission.zip', help='Path to save the submission zip.')
     parser.add_argument('--device', type=str, default="cuda:0", help='Which device the training is on.')
