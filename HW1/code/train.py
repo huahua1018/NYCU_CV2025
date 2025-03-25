@@ -45,10 +45,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Image Classification")
 
     parser.add_argument(
-        "--train_path", type=str, default="../data/train/", help="Training Dataset Path"
+        "--train_path",
+        type=str,
+        default="../data/train/",
+        help="Training Dataset Path"
     )
     parser.add_argument(
-        "--val_path", type=str, default="../data/val/", help="Validation Dataset Path"
+        "--val_path",
+        type=str,
+        default="../data/val/",
+        help="Validation Dataset Path"
     )
     parser.add_argument(
         "--ckpt_path",
@@ -57,29 +63,65 @@ if __name__ == "__main__":
         help="Path to checkpoint folder.",
     )
     parser.add_argument(
-        "--img_path", type=str, default="../img/", help="Path to save the image."
+        "--img_path",
+        type=str,
+        default="../img/",
+        help="Path to save the image."
     )
     parser.add_argument(
-        "--device", type=str, default="cuda:0", help="Which device the training is on."
+        "--device",
+        type=str,
+        default="cuda:0",
+        help="Which device the training is on."
     )
-    parser.add_argument("--num_workers", type=int, default=4, help="Number of worker")
     parser.add_argument(
-        "--num_classes", type=int, default=100, help="Number of classes."
+        "--num_workers",
+        type=int,
+        default=4,
+        help="Number of worker"
+    )
+    parser.add_argument(
+        "--num_classes",
+        type=int,
+        default=100,
+        help="Number of classes."
     )
 
-    parser.add_argument("--bs", type=int, default=32, help="Batch size for training.")
     parser.add_argument(
-        "--epochs", type=int, default=50, help="Number of epochs to train."
-    )
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate.")
-    parser.add_argument(
-        "--min_lr", type=float, default=1e-6, help="Minimum learning rate."
+        "--bs",
+        type=int,
+        default=32,
+        help="Batch size for training."
     )
     parser.add_argument(
-        "--weight_decay", type=float, default=0.045, help="Weight decay."
+        "--epochs",
+        type=int,
+        default=50,
+        help="Number of epochs to train."
     )
     parser.add_argument(
-        "--factor", type=float, default=0.1, help="Factor for ReduceLROnPlateau."
+        "--lr",
+        type=float,
+        default=1e-4,
+        help="Learning rate."
+    )
+    parser.add_argument(
+        "--min_lr",
+        type=float,
+        default=1e-6,
+        help="Minimum learning rate."
+    )
+    parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=0.045,
+        help="Weight decay."
+    )
+    parser.add_argument(
+        "--factor",
+        type=float,
+        default=0.1,
+        help="Factor for ReduceLROnPlateau."
     )
     parser.add_argument(
         "--mixup_alpha",
@@ -89,7 +131,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--save_per_epoch", type=int, default=3, help="Save CKPT per ** epochs"
+        "--save_per_epoch",
+        type=int,
+        default=3,
+        help="Save CKPT per ** epochs"
     )
     parser.add_argument(
         "--start_from_epoch",
@@ -167,7 +212,7 @@ if __name__ == "__main__":
     )
 
     # create model and compute the number of parameters
-    mymodel = model.Resnext_101_32(
+    mymodel = model.Resnext101(
         args=args,
         num_classes=args.num_classes,
         lr=args.lr,
