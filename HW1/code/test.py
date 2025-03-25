@@ -102,7 +102,7 @@ if __name__ == "__main__":
     test_dataset = utils.TestDataset(data_dir=args.test_path)
     test_loader = DataLoader(test_dataset, batch_size=args.bs, shuffle=False)
 
-    myModel = model.Resnext_101_32(num_classes=args.num_classes)
+    myModel = model.Resnext101(num_classes=args.num_classes)
     myModel.to(args.device)
     myModel.eval()
     myModel.load_state_dict(torch.load(args.ckpt_path))
