@@ -5,3 +5,5 @@ data/
 *.zip
 __pycache__/
 runs/
+result/
+report/

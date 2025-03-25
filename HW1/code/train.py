@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import random
@@ -21,6 +22,12 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+def replace_relu_with_leakyrelu(module):
+    for name, child in module.named_children():
+        if isinstance(child, nn.ReLU):
+            setattr(module, name, nn.LeakyReLU(negative_slope=0.01, inplace=True))
+        else:
+            replace_relu_with_leakyrelu(child)  # 遞迴替換
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Image Classification")
@@ -33,10 +40,15 @@ if __name__ == '__main__':
     parser.add_argument('--num_workers', type=int, default=4, help='Number of worker')
     parser.add_argument('--num_classes', type=int, default=100, help='Number of classes.')
 
-    parser.add_argument('--bs', type=int, default=64, help='Batch size for training.')
+    parser.add_argument('--bs', type=int, default=32, help='Batch size for training.')
     parser.add_argument('--epochs', type=int, default=50, help='Number of epochs to train.')
-    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate.')
-    parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay.')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate.')
+    parser.add_argument('--min_lr', type=float, default=1e-6, help='Minimum learning rate.')
+    parser.add_argument('--weight_decay', type=float, default=0.045, help='Weight decay.')
+    parser.add_argument('--factor', type=float, default=0.1, help='Factor for ReduceLROnPlateau.')
+    parser.add_argument('--activation', type=str, default='ReLU', help='Activation function.')
+    parser.add_argument('--model', type=str, default='Resnext101_32_pre12+lastCBAM+coloraug', help='Model name.')
+    parser.add_argument('--mixup_alpha', type=bool, default=0.2, help='Alpha used in Mixup, if 0, then no Mixup.')
 
     parser.add_argument('--save_per_epoch', type=int, default=3, help='Save CKPT per ** epochs')
     parser.add_argument('--start_from_epoch', type=int, default=0, help='Begin training from this epoch.')
@@ -47,7 +59,8 @@ if __name__ == '__main__':
 
     # tensorboard
     # 使用模型參數生成自定義的 log_dir 名稱
-    log_dir = f'runs/bs_{args.bs}_epochs_{args.epochs}_lr_{args.lr}_wd_{args.weight_decay}'
+    parm_dir = f'model_{args.model}_bs_{args.bs}_epochs_{args.epochs}_lr_{args.lr}_wd_{args.weight_decay}_factor_{args.factor}_act_{args.activation}_minlr_{args.min_lr}_mixup_{args.mixup_alpha}'
+    log_dir = os.path.join('runs', parm_dir)
 
     # 確保 log_dir 目錄存在
     os.makedirs(log_dir, exist_ok=True)
@@ -55,24 +68,28 @@ if __name__ == '__main__':
     # 創建 SummaryWriter 實例
     writer = SummaryWriter(log_dir)
 
-    writer = SummaryWriter()
-
     # create checkpoint folder
+    args.ckpt_path = os.path.join(args.ckpt_path, parm_dir)
     utils.create_folder_if_not_exists(args.ckpt_path)
+
+    # create image folder
+    args.img_path = os.path.join(args.img_path, parm_dir)
+    utils.create_folder_if_not_exists(args.img_path)
 
     # define transform for training and validation
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),  # 隨機裁剪 (保持 80% - 100% 的比例)
         transforms.RandomHorizontalFlip(p=0.5),  # 50% 機率水平翻轉
         transforms.RandomRotation(degrees=15),  # 隨機旋轉 ±15 度
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2), # 隨機+-20% 調整亮度、對比度、飽和度、色調
         transforms.ToTensor(),          # 轉換為Tensor
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])  # 標準化
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # 標準化, ref: https://pytorch.org/vision/main/models/generated/torchvision.models.resnext101_32x8d.html#torchvision.models.resnext101_32x8d
         ])
 
     val_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
     # create Dataset
@@ -84,8 +101,12 @@ if __name__ == '__main__':
     val_loader = DataLoader(dataset=val_dataset, batch_size=args.bs, shuffle=False, num_workers=args.num_workers)
 
     # create model and compute the number of parameters
-    mymodel = model.Resnet_50(args=args, num_classes=args.num_classes, lr=args.lr, weight_decay=args.weight_decay).to(args.device)
-    print("Model parameters: ", sum(p.numel() for p in mymodel.parameters() if p.requires_grad))
+    mymodel = model.Resnext_101_32(args=args, num_classes=args.num_classes, lr=args.lr, min_lr=args.min_lr, weight_decay=args.weight_decay, factor=args.factor, mixup_alpha=args.mixup_alpha).to(args.device)
+
+    with open(f"{args.img_path}/model_architecture.txt", "w") as f:
+        print("Model parameters: ", sum(p.numel() for p in mymodel.parameters() if p.requires_grad), file=f)
+        print(mymodel, file=f)
+    f.close()
 
     # begin training
     train_loss_proc = []
