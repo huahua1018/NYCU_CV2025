@@ -11,12 +11,12 @@ I selected ResNeXt101_32x8d as the backbone and improved its capabilities by inc
 
 #### 1. Use conda (Optimal)
 ```
-conda env create -f requirements.yml 
+conda env create -f environment.yml 
 ```
 
 #### 2. Use pip
 ```
-pip install -r environment.txt
+pip install -r requirements.txt
 ```
 
 ### Step 2 : Dataset Preparation
