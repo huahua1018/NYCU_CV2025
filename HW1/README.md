@@ -48,7 +48,7 @@ python train.py --train_path <Path to train data> --val_path <Path to validation
 ### Test
 
 ```
-python reflection_removal_test.py --test_path <Path to test data> --ckpt_path <Path to checkpoint> --csv_path <Path to save csv> --zip_path <Path to save zip>               
+python test.py --test_path <Path to test data> --ckpt_path <Path to checkpoint> --csv_path <Path to save csv> --zip_path <Path to save zip>               
 ```
 
 ## Performance snapshot
