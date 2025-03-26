@@ -52,3 +52,7 @@ python test.py --test_path <Path to test data> --ckpt_path <Path to checkpoint> 
 ```
 
 ## Performance snapshot
+![Screenshot from 2025-03-27 00-00-15](https://github.com/user-attachments/assets/94ea4a4e-92ad-43b0-b83a-84feebff8403)
+
+
+
