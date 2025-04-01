@@ -111,7 +111,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--bs",
         type=int,
-        default=16,
+        default=8,
         help="Batch size for training."
     )
     parser.add_argument(
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-3,
+        default=1e-4,
         help="Learning rate."
     )
     parser.add_argument(
@@ -162,6 +162,7 @@ if __name__ == "__main__":
     # set seed
     setup_seed(118)
 
+
     # create log directory for tensorboard
     parm_dir = (f"model_{args.model_name}_bs_{args.bs}_epochs_{args.epochs}_"
                 f"lr_{args.lr}_wd_{args.weight_decay}_factor_{args.factor}_"
@@ -198,23 +199,23 @@ if __name__ == "__main__":
 
     train_transform = transforms.Compose(
         [
-            transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
-            transforms.RandomRotation(degrees=10),
-            transforms.ColorJitter(
-                brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2
-            ),
+            # transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+            # transforms.RandomRotation(degrees=10),
+            # transforms.ColorJitter(
+            #     brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2
+            # ),
             transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            ),  # Normalize
+            # transforms.Normalize(
+            #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+            # ),  # Normalize
         ]
     )
 
     val_transform = transforms.Compose(
         [
-            transforms.Resize((224, 224)),
+            # transforms.Resize((224, 224)),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
     )
 
@@ -271,9 +272,9 @@ if __name__ == "__main__":
 
     for epoch in range(args.start_from_epoch + 1, args.epochs + 1):
 
-        train_loss = myModel.train_one_epoch(train_loader, epoch)
+        train_loss, train_lr = myModel.train_one_epoch(train_loader, epoch)
         
-        val_loss = myModel.eval_one_epoch(val_loader, epoch, json_path, csv_path)
+        val_loss = myModel.eval_one_epoch(val_loader, epoch, json_path, csv_path, writer)
         mAP = myModel.calculate_mAP(
             pred_file=json_path,
             ground_truth_file=args.val_json_path,
@@ -289,6 +290,7 @@ if __name__ == "__main__":
         writer.add_scalar("Loss/train", train_loss, epoch)
         writer.add_scalar("Loss/valid", val_loss, epoch)
         writer.add_scalar("mAP/valid", mAP, epoch)
+        writer.add_scalar("Learning Rate", train_lr, epoch)
         writer.add_scalars("Loss", {"train": train_loss, "valid": val_loss}, epoch)
 
         # save the model

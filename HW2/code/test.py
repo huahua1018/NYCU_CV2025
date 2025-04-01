@@ -104,7 +104,13 @@ if __name__ == "__main__":
     csv_path = os.path.join(save_dir, "pred.csv")
 
     test_dataset = utils.TestDataset(data_dir=args.test_data_path)
-    test_loader = DataLoader(test_dataset, batch_size=args.bs, shuffle=False)
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=args.bs, 
+        shuffle=False, 
+        num_workers=args.num_workers,
+        collate_fn=utils.collate_fn_test
+    )
 
 
     myModel = model.ModelTrainer(

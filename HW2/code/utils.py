@@ -12,6 +12,7 @@ Functions:
 
 import os
 import json
+import cv2
 
 import torch
 import numpy as np
@@ -101,11 +102,11 @@ class TestDataset(Dataset):
         self.image_paths = os.listdir(data_dir)
         self.transform = transforms.Compose(
             [
-                transforms.Resize((224, 224)),
+                # transforms.Resize((224, 224)),
                 transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                ),
+                # transforms.Normalize(
+                #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                # ),
             ]
         )
 
@@ -120,10 +121,15 @@ class TestDataset(Dataset):
         return image, img_name  # return img, img name
 
 def collate_fn(batch):
-    images, id, targets = zip(*batch)  # 拆分圖像與標註
-    images = torch.stack(images, 0)  # 圖像 shape 相同，可直接 stack
+    images, id, targets = zip(*batch)  # 拆分圖像與標註    
     id = torch.stack(id, 0)  # 圖像 id shape 相同，可直接 stack
-    return images, id, list(targets)  # `targets` 保持 list 形式
+
+    return images, id, targets
+
+def collate_fn_test(batch):
+    images, id = zip(*batch)  # 拆分圖像與標註
+    id = torch.stack(id, 0)  # 圖像 id shape 相同，可直接 stack
+    return images, id
 
 def create_folder_if_not_exists(folder_path):
     """
@@ -185,3 +191,48 @@ def show_process(
     file_path = os.path.join(folder_path, f"{yname}_{file_name}.png")
     plt.savefig(file_path)
     print(f"Save the figure to {file_path}")
+
+
+def visualize_predictions(image, id, targets, pred_list, writer, epoch):
+    # 1. 原始圖像
+    img_with_boxes = image.permute(1, 2, 0).cpu().numpy()  # [C, H, W] -> [H, W, C]
+    img_with_boxes = np.ascontiguousarray(img_with_boxes)
+
+    # 2. 預測結果 (這裡的 pred_list 是您提供的每個預測結果列表)
+    for pred in pred_list:
+        xmin, ymin, xmax, ymax = pred['bbox']
+        
+        # 畫出預測框
+        cv2.rectangle(img_with_boxes, 
+                      (int(xmin), int(ymin)), 
+                      (int(xmax), int(ymax)), 
+                      (255, 0, 0), 1)  # 用藍色畫框
+        cv2.putText(img_with_boxes, 
+                    f"{pred['category_id']}:{pred['score']:.2f}", 
+                    (int(xmin), int(ymin)-2), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 
+                    0.3, (255, 255, 255), 1)
+
+    # 3. Ground truth 真實標註
+    gt_boxes = targets['boxes']
+    gt_labels = targets['labels']
+    
+    # 畫出真實框
+    for box, label in zip(gt_boxes, gt_labels):
+        xmin, ymin, xmax, ymax = box
+        cv2.rectangle(img_with_boxes, 
+                      (int(xmin), int(ymin)), 
+                      (int(xmax), int(ymax)), 
+                      (0, 255, 0), 1)  # 用綠色畫框
+        cv2.putText(img_with_boxes, 
+                    f"{label.item()-1}",
+                    (int(xmin), int(ymin)-2), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 
+                    0.3, (0, 255, 0), 1)
+
+    # 轉換回 [C, H, W] 並將圖像數據範圍從 [0, 255] -> [0.0, 1.0]
+    img_with_boxes_tensor = torch.from_numpy(img_with_boxes).permute(2, 0, 1).float()
+
+    # 4. 在 TensorBoard 上顯示圖片
+    if writer is not None:
+        writer.add_image(f'val{id}_pred', img_with_boxes_tensor, epoch)

@@ -14,9 +14,12 @@ from typing import Tuple, List, Dict, Optional
 from collections import OrderedDict
 from torchvision.models.detection.roi_heads import fastrcnn_loss
 from torchvision.models.detection.rpn import concat_box_prediction_layers
+from torchvision.models.detection.rpn import AnchorGenerator
 
 import os
 import json
+
+from utils import visualize_predictions
 
 class CustomFasterRCNN(FasterRCNN):
     def eager_outputs(self, losses, detections):
@@ -35,16 +38,10 @@ class ModelFactory:
     def get_model(model_name, num_classes=11, pretrained=True):
         if model_name == "fasterrcnn_resnet50_fpn":
             model = fasterrcnn_resnet50_fpn(weights="DEFAULT" if pretrained else None, weights_backbone="DEFAULT" if pretrained else None, trainable_backbone_layers=2)
-            # Modify the model to fit the number of classes
-            # in_features = model.roi_heads.box_predictor.cls_score.in_features
-            # model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 
         elif model_name == "fasterrcnn_resnet50_fpn_v2":
             model = fasterrcnn_resnet50_fpn_v2(weights="DEFAULT" if pretrained else None, weights_backbone="DEFAULT" if pretrained else None, trainable_backbone_layers=2)
-           
-            # Modify the model to fit the number of classes
-            # in_features = model.roi_heads.box_predictor.cls_score.in_features
-            # model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+        
         else:
             raise ValueError(f"Model {model_name} is not supported.")
         
@@ -160,15 +157,18 @@ class ModelTrainer:
         Initializes the model trainer with the specified model name and number of classes.
         """
         self.device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+        
+        #---------------------------- Pytorch ---------------------------------------#
+        
         base_model = ModelFactory.get_model(model_name, num_classes)
-    
 
         # 建立我們的自訂 Faster R-CNN
         self.model = CustomFasterRCNN(
             backbone=base_model.backbone,
             num_classes=num_classes,
             rpn_anchor_generator=base_model.rpn.anchor_generator,
-            box_roi_pool=base_model.roi_heads.box_roi_pool
+            box_roi_pool=base_model.roi_heads.box_roi_pool,
+            box_score_thresh = 0.5 # 過濾掉低於 0.5 的預測
         )
 
         # 設定 model 的 RPN、ROI 頭部
@@ -179,6 +179,37 @@ class ModelTrainer:
         in_features = self.model.roi_heads.box_predictor.cls_score.in_features
         self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
         self.model.to(self.device)
+        #---------------------------- Pytorch ---------------------------------------#
+        
+
+        #---------------------------- Custom ---------------------------------------#
+        # # 選擇 ResNet-50 並加上 FPN (提升小物件偵測能力)
+        # backbone = torchvision.models.resnet50(weights="IMAGENET1K_V2")
+        # backbone = torch.nn.Sequential(*list(backbone.children())[:-2])  # 去掉全連接層
+        # backbone.out_channels = 2048  # ResNet50 輸出通道數
+
+        # # 設定小物件適合的 Anchor
+        # anchor_generator = AnchorGenerator(
+        #     sizes=((16, 32, 64, 128),),  # 適合數字的小型 anchor
+        #     aspect_ratios=((0.5, 1.0, 2.0),)
+        # )
+
+        # # ROI Pooling 設定
+        # roi_pooler = torchvision.ops.MultiScaleRoIAlign(
+        #     featmap_names=["0"],  # 只使用主要特徵圖
+        #     output_size=7,
+        #     sampling_ratio=2
+        # )
+
+        # # 設定 Faster R-CNN
+        # self.model = FasterRCNN(
+        #     backbone,
+        #     num_classes=num_classes,  # 數字 0~9 + 背景
+        #     rpn_anchor_generator=anchor_generator,
+        #     box_roi_pool=roi_pooler
+        # )
+        # self.model.to(self.device)
+        #---------------------------- Custom ---------------------------------------#
 
 
         self.args = args
@@ -206,22 +237,28 @@ class ModelTrainer:
         pbar = tqdm(data_loader, ncols=120, desc=f"Epoch {epoch}")
 
         for img, img_id, target in pbar:
-            img = img.to(self.device)  # 將圖像移動到 GPU
-            new_target = []
-            for t in target:
-                # 获取 bounding boxes 和 labels
-                bboxes = t['boxes']  # (N, 4) 的 tensor
-                labels = t['labels']  # (N,) 的 tensor
+            # img = img.to(self.device)  # 將圖像移動到 GPU
+            img = [imgi.to("cuda:0") for imgi in img]
+            # target = [t.to("cuda:0") for t in target]
+            # 假設 target 是包含多個張量的字典
+            target = [{k: v.to("cuda:0") for k, v in t.items()} for t in target]
+
+
+            # new_target = []
+            # for t in target:
+            #     # 获取 bounding boxes 和 labels
+            #     bboxes = t['boxes']  # (N, 4) 的 tensor
+            #     labels = t['labels']  # (N,) 的 tensor
                 
-                # 创建符合 Faster R-CNN 要求的格式
-                target_dict = {
-                    "boxes": bboxes.to(self.device),  # (N, 4) 的 tensor
-                    "labels": labels.to(self.device),  # (N,) 的 tensor
-                }
+            #     # 创建符合 Faster R-CNN 要求的格式
+            #     target_dict = {
+            #         "boxes": bboxes.to(self.device),  # (N, 4) 的 tensor
+            #         "labels": labels.to(self.device),  # (N,) 的 tensor
+            #     }
                 
-                # 将转换后的字典添加到 new_target 列表中
-                new_target.append(target_dict)
-            target = new_target
+            #     # 将转换后的字典添加到 new_target 列表中
+            #     new_target.append(target_dict)
+            # target = new_target
 
             self.optim.zero_grad()  # 清除梯度
 
@@ -237,9 +274,10 @@ class ModelTrainer:
             lr = self.optim.param_groups[0]["lr"]
             pbar.set_postfix(loss=losses.item(), lr=lr)
 
-        return total_loss / len(data_loader)
 
-    def eval_one_epoch(self, data_loader, epoch, json_path, csv_path):
+        return total_loss / len(data_loader), lr
+
+    def eval_one_epoch(self, data_loader, epoch, json_path, csv_path, writer):
         """
         Evaluates the model for one epoch.
 
@@ -262,22 +300,26 @@ class ModelTrainer:
         with torch.no_grad():
             for img, img_id, target in pbar:
 
-                img = img.to(self.device)
-                new_target = []
-                for t in target:
-                    # 获取 bounding boxes 和 labels
-                    bboxes = t['boxes']  # (N, 4) 的 tensor
-                    labels = t['labels']  # (N,) 的 tensor
+                # img = img.to(self.device)
+                img = [imgi.to("cuda:0") for imgi in img]
+                # target = [t.to("cuda:0") for t in target]
+                # 假設 target 是包含多個張量的字典
+                target = [{k: v.to("cuda:0") for k, v in t.items()} for t in target]
+                # new_target = []
+                # for t in target:
+                #     # 获取 bounding boxes 和 labels
+                #     bboxes = t['boxes']  # (N, 4) 的 tensor
+                #     labels = t['labels']  # (N,) 的 tensor
                     
-                    # 创建符合 Faster R-CNN 要求的格式
-                    target_dict = {
-                        "boxes": bboxes.to(self.device),  # (N, 4) 的 tensor
-                        "labels": labels.to(self.device),  # (N,) 的 tensor
-                    }
+                #     # 创建符合 Faster R-CNN 要求的格式
+                #     target_dict = {
+                #         "boxes": bboxes.to(self.device),  # (N, 4) 的 tensor
+                #         "labels": labels.to(self.device),  # (N,) 的 tensor
+                #     }
                     
-                    # 将转换后的字典添加到 new_target 列表中
-                    new_target.append(target_dict)
-                target = new_target
+                #     # 将转换后的字典添加到 new_target 列表中
+                #     new_target.append(target_dict)
+                # target = new_target
 
                 loss_dict, output = eval_forward(self.model, img, target)
 
@@ -290,6 +332,12 @@ class ModelTrainer:
                 
                 detections = []
                 for i in range(len(img_id)):
+                    if img_id[i] < 10:
+                        draw = True
+                        draw_pred = []
+                    else:
+                        draw = False
+
                     for j in range(len(output[i]["boxes"])):
                         x_min, y_min, x_max, y_max = output[i]["boxes"][j].tolist()
                         width = x_max - x_min
@@ -306,6 +354,13 @@ class ModelTrainer:
 
                         detections.append({"x_min": x_min, "digit": digit})
 
+                        if draw and score > 0.5:
+                            draw_pred.append({
+                                "bbox": [x_min, y_min, x_max, y_max],
+                                "category_id": digit-1,
+                                "score": score
+                            })
+
                     if detections:
                         detections.sort(key=lambda d: d["x_min"])  # sort by x_min
                         pred_value = int("".join(str(d["digit"] - 1) for d in detections))
@@ -313,6 +368,11 @@ class ModelTrainer:
                         pred_value = -1
 
                     pred_value_list.append([int(img_id[i]), pred_value])
+                    
+                    if(draw):
+                        visualize_predictions(img[i], img_id[i], target[i], draw_pred, writer, epoch)
+
+                    
 
 
         # update scheduler
@@ -341,7 +401,9 @@ class ModelTrainer:
 
         for img, img_id in pbar:
 
-            img = img.to(self.device)
+            # img = img.to(self.device)
+            img = [imgi.to("cuda:0") for imgi in img]
+
             output = self.model(img)
             
             detections = []
