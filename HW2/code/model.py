@@ -4,31 +4,129 @@ import torchvision
 from torchvision.models.detection import fasterrcnn_resnet50_fpn, fasterrcnn_resnet50_fpn_v2, FasterRCNN
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.ops import box_iou
-# from sklearn.metrics import average_precision_score
+from torchvision.models import swin_t
 from tqdm import tqdm
 from pycocotools.cocoeval import COCOeval
 from pycocotools.coco import COCO
 import pandas as pd
 
-from typing import Tuple, List, Dict, Optional
+from typing import Tuple, List, Dict, Optional, Callable
 from collections import OrderedDict
 from torchvision.models.detection.roi_heads import fastrcnn_loss
 from torchvision.models.detection.rpn import concat_box_prediction_layers
 from torchvision.models.detection.rpn import AnchorGenerator
+from torchvision.models.detection.backbone_utils import BackboneWithFPN
+from torchvision.models.feature_extraction import create_feature_extractor, get_graph_node_names
+from torchvision.models.resnet import resnet50
+from torchvision.models.mobilenetv2 import MobileNetV2, MobileNet_V2_Weights
+from torchvision.models.swin_transformer import SwinTransformerBlock
+
+from torch import Tensor
+from torchvision.ops import FeaturePyramidNetwork
+from torchvision.ops.feature_pyramid_network import LastLevelMaxPool, ExtraFPNBlock
+from torchvision.models._utils import IntermediateLayerGetter
 
 import os
 import json
 
 from utils import visualize_predictions
 
-class CustomFasterRCNN(FasterRCNN):
-    def eager_outputs(self, losses, detections):
+from torchvision.ops.feature_pyramid_network import LastLevelMaxPool
 
-        if self.training:
-            return losses
-        return detections
+class SwinBackboneWithFPN(nn.Module):
+    """
+    Adds a FPN on top of a model.
+    Internally, it uses torchvision.models._utils.IntermediateLayerGetter to
+    extract a submodel that returns the feature maps specified in return_layers.
+    The same limitations of IntermediateLayerGetter apply here.
+    Args:
+        backbone (nn.Module)
+        return_layers (Dict[name, new_name]): a dict containing the names
+            of the modules for which the activations will be returned as
+            the key of the dict, and the value of the dict is the name
+            of the returned activation (which the user can specify).
+        in_channels_list (List[int]): number of channels for each feature map
+            that is returned, in the order they are present in the OrderedDict
+        out_channels (int): number of channels in the FPN.
+        norm_layer (callable, optional): Module specifying the normalization layer to use. Default: None
+    Attributes:
+        out_channels (int): the number of channels in the FPN
+    """
 
+    def __init__(
+        self,
+        backbone: nn.Module,
+        return_layers: Dict[str, str],
+        in_channels_list: List[int],
+        out_channels: int,
+        extra_blocks: Optional[ExtraFPNBlock] = None,
+        norm_layer: Optional[Callable[..., nn.Module]] = None,
+    ) -> None:
+        super().__init__()
 
+        if extra_blocks is None:
+            extra_blocks = LastLevelMaxPool()
+
+        self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
+        self.fpn = FeaturePyramidNetwork(
+            in_channels_list=in_channels_list,
+            out_channels=out_channels,
+            extra_blocks=extra_blocks,
+            norm_layer=norm_layer,
+        )
+        self.out_channels = out_channels
+
+    def forward(self, x: Tensor) -> Dict[str, Tensor]:
+        x = self.body(x)
+        
+        x = {k: v.permute(0, 3, 1, 2) for k, v in x.items()}
+
+        x = self.fpn(x)
+        return x
+
+def _swin_extractor(
+    trainable_layers: int,
+    returned_layers: Optional[List[int]] = None,
+    extra_blocks: Optional[nn.Module] = None,
+    norm_layer: Optional[Callable[..., nn.Module]] = None,
+) -> nn.Module:
+    backbone = swin_t(weights="DEFAULT")
+    backbone = backbone.features
+    # Gather the indices of blocks which are strided. These are the locations of C1, ..., Cn-1 blocks.
+    # The first and last blocks are always included because they are the C0 (conv1) and Cn.
+    stage_indices = [1, 3, 5, 7]  # 這裡手動映射層
+    num_stages = len(stage_indices)
+
+    # find the index of the layer from which we won't freeze
+    if trainable_layers < 0 or trainable_layers > num_stages:
+        raise ValueError(f"Trainable layers should be in the range [0,{num_stages}], got {trainable_layers} ")
+    freeze_before = len(backbone) if trainable_layers == 0 else stage_indices[num_stages - trainable_layers]
+
+    for b in backbone[:freeze_before]:
+        for parameter in b.parameters():
+            parameter.requires_grad_(False)
+
+    out_channels = 256
+
+    if extra_blocks is None:
+        extra_blocks = LastLevelMaxPool()
+
+    if returned_layers is None:
+        returned_layers = [num_stages - 2, num_stages - 1]
+    if min(returned_layers) < 0 or max(returned_layers) >= num_stages:
+        raise ValueError(f"Each returned layer should be in the range [0,{num_stages - 1}], got {returned_layers} ")
+    return_layers = {f"{stage_indices[k]}": str(v) for v, k in enumerate(returned_layers)}
+
+    # print(f"Return layers: {return_layers}")
+    # print(f"Returned layers: {returned_layers}")
+    in_channels_list = [96, 192, 384, 768]  # Swin-T 這幾層的輸出通道數
+    in_channels_list = [in_channels_list[i] for i in returned_layers]
+    # print(f"In channels list: {in_channels_list}")
+
+    return SwinBackboneWithFPN(
+        backbone, return_layers, in_channels_list, out_channels, extra_blocks=extra_blocks, norm_layer=norm_layer
+    )
+    
 class ModelFactory:
     """ 
     Responsible for returning the corresponding PyTorch model based on the name.
@@ -79,9 +177,6 @@ def eval_forward(model, images, targets):
     features = model.backbone(images.tensors)
     if isinstance(features, torch.Tensor):
         features = OrderedDict([("0", features)])
-    model.rpn.training=True
-    #model.roi_heads.training=True
-
 
     #####proposals, proposal_losses = model.rpn(images, features, targets)
     features_rpn = list(features.values())
@@ -113,8 +208,11 @@ def eval_forward(model, images, targets):
 
     #####detections, detector_losses = model.roi_heads(features, proposals, images.image_sizes, targets)
     image_shapes = images.image_sizes
-    proposals, matched_idxs, labels, regression_targets = model.roi_heads.select_training_samples(proposals, targets)
-    box_features = model.roi_heads.box_roi_pool(features, proposals, image_shapes)
+    
+    # --------------------- only training ---------
+    proposals_train, matched_idxs, labels, regression_targets = model.roi_heads.select_training_samples(proposals, targets)
+
+    box_features = model.roi_heads.box_roi_pool(features, proposals_train, image_shapes)
     box_features = model.roi_heads.box_head(box_features)
     class_logits, box_regression = model.roi_heads.box_predictor(box_features)
 
@@ -122,6 +220,11 @@ def eval_forward(model, images, targets):
     detector_losses = {}
     loss_classifier, loss_box_reg = fastrcnn_loss(class_logits, box_regression, labels, regression_targets)
     detector_losses = {"loss_classifier": loss_classifier, "loss_box_reg": loss_box_reg}
+    # -----------------------------------
+
+    box_features = model.roi_heads.box_roi_pool(features, proposals, image_shapes)
+    box_features = model.roi_heads.box_head(box_features)
+    class_logits, box_regression = model.roi_heads.box_predictor(box_features)
     boxes, scores, labels = model.roi_heads.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
     num_images = len(boxes)
     for i in range(num_images):
@@ -162,13 +265,15 @@ class ModelTrainer:
         
         base_model = ModelFactory.get_model(model_name, num_classes)
 
-        # 建立我們的自訂 Faster R-CNN
-        self.model = CustomFasterRCNN(
+        self.model = FasterRCNN(
             backbone=base_model.backbone,
             num_classes=num_classes,
             rpn_anchor_generator=base_model.rpn.anchor_generator,
             box_roi_pool=base_model.roi_heads.box_roi_pool,
-            box_score_thresh = 0.5 # 過濾掉低於 0.5 的預測
+            rpn_pre_nms_top_n_train=2000,
+            rpn_pre_nms_top_n_test=2000,
+            rpn_post_nms_top_n_train=2000,
+            rpn_post_nms_top_n_test=2000,
         )
 
         # 設定 model 的 RPN、ROI 頭部
@@ -183,30 +288,44 @@ class ModelTrainer:
         
 
         #---------------------------- Custom ---------------------------------------#
-        # # 選擇 ResNet-50 並加上 FPN (提升小物件偵測能力)
-        # backbone = torchvision.models.resnet50(weights="IMAGENET1K_V2")
-        # backbone = torch.nn.Sequential(*list(backbone.children())[:-2])  # 去掉全連接層
-        # backbone.out_channels = 2048  # ResNet50 輸出通道數
+        # # Swin Transformer 作為 backbone
+        # backbone = _swin_extractor(trainable_layers=3)
 
-        # # 設定小物件適合的 Anchor
-        # anchor_generator = AnchorGenerator(
-        #     sizes=((16, 32, 64, 128),),  # 適合數字的小型 anchor
-        #     aspect_ratios=((0.5, 1.0, 2.0),)
-        # )
+        # anchor_sizes = (
+        #     (
+        #         8,
+        #         16,
+        #         32,
+        #         64,
+        #         128,
+        #         256,
+        #         512,
+        #     ),
+        # ) * 3
+        
+        # # anchor_sizes = ((8, 16,), (32, 64,), (128, 256))
+        # aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
 
-        # # ROI Pooling 設定
-        # roi_pooler = torchvision.ops.MultiScaleRoIAlign(
-        #     featmap_names=["0"],  # 只使用主要特徵圖
-        #     output_size=7,
-        #     sampling_ratio=2
-        # )
+        # anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
+        
+
+        # # # ROI Pooling 設定
+        # # roi_pooler = torchvision.ops.MultiScaleRoIAlign(
+        # #     featmap_names=["0"],  # 只使用主要特徵圖
+        # #     output_size=7,
+        # #     sampling_ratio=2
+        # # )
 
         # # 設定 Faster R-CNN
         # self.model = FasterRCNN(
         #     backbone,
         #     num_classes=num_classes,  # 數字 0~9 + 背景
         #     rpn_anchor_generator=anchor_generator,
-        #     box_roi_pool=roi_pooler
+        #     # box_roi_pool=roi_pooler
+        #     rpn_pre_nms_top_n_train=2000,
+        #     rpn_pre_nms_top_n_test=2000,
+        #     rpn_post_nms_top_n_train=2000,
+        #     rpn_post_nms_top_n_test=2000,
         # )
         # self.model.to(self.device)
         #---------------------------- Custom ---------------------------------------#
@@ -239,26 +358,8 @@ class ModelTrainer:
         for img, img_id, target in pbar:
             # img = img.to(self.device)  # 將圖像移動到 GPU
             img = [imgi.to("cuda:0") for imgi in img]
-            # target = [t.to("cuda:0") for t in target]
             # 假設 target 是包含多個張量的字典
             target = [{k: v.to("cuda:0") for k, v in t.items()} for t in target]
-
-
-            # new_target = []
-            # for t in target:
-            #     # 获取 bounding boxes 和 labels
-            #     bboxes = t['boxes']  # (N, 4) 的 tensor
-            #     labels = t['labels']  # (N,) 的 tensor
-                
-            #     # 创建符合 Faster R-CNN 要求的格式
-            #     target_dict = {
-            #         "boxes": bboxes.to(self.device),  # (N, 4) 的 tensor
-            #         "labels": labels.to(self.device),  # (N,) 的 tensor
-            #     }
-                
-            #     # 将转换后的字典添加到 new_target 列表中
-            #     new_target.append(target_dict)
-            # target = new_target
 
             self.optim.zero_grad()  # 清除梯度
 
@@ -273,7 +374,6 @@ class ModelTrainer:
             # get current learning rate and update tqdm
             lr = self.optim.param_groups[0]["lr"]
             pbar.set_postfix(loss=losses.item(), lr=lr)
-
 
         return total_loss / len(data_loader), lr
 
@@ -294,32 +394,15 @@ class ModelTrainer:
         pred_value_list = []  # task 2
         total_loss = 0
 
-        self.model.train()
+        self.model.eval()
         pbar = tqdm(data_loader, ncols=120, desc=f"Epoch {epoch}", unit="batch")
 
         with torch.no_grad():
             for img, img_id, target in pbar:
 
-                # img = img.to(self.device)
-                img = [imgi.to("cuda:0") for imgi in img]
-                # target = [t.to("cuda:0") for t in target]
+                img = [imgi.to(self.device) for imgi in img]
                 # 假設 target 是包含多個張量的字典
-                target = [{k: v.to("cuda:0") for k, v in t.items()} for t in target]
-                # new_target = []
-                # for t in target:
-                #     # 获取 bounding boxes 和 labels
-                #     bboxes = t['boxes']  # (N, 4) 的 tensor
-                #     labels = t['labels']  # (N,) 的 tensor
-                    
-                #     # 创建符合 Faster R-CNN 要求的格式
-                #     target_dict = {
-                #         "boxes": bboxes.to(self.device),  # (N, 4) 的 tensor
-                #         "labels": labels.to(self.device),  # (N,) 的 tensor
-                #     }
-                    
-                #     # 将转换后的字典添加到 new_target 列表中
-                #     new_target.append(target_dict)
-                # target = new_target
+                target = [{k: v.to(self.device) for k, v in t.items()} for t in target]
 
                 loss_dict, output = eval_forward(self.model, img, target)
 
@@ -345,21 +428,22 @@ class ModelTrainer:
                         digit = output[i]["labels"][j].item()
                         score = output[i]["scores"][j].item()
 
-                        pred_list.append({
-                            "image_id": int(img_id[i]),
-                            "bbox": [x_min, y_min, width, height],
-                            "score": score,
-                            "category_id": digit
-                        })
-
-                        detections.append({"x_min": x_min, "digit": digit})
-
-                        if draw and score > 0.5:
-                            draw_pred.append({
-                                "bbox": [x_min, y_min, x_max, y_max],
-                                "category_id": digit-1,
-                                "score": score
+                        if score > self.args.score_threshold:
+                            pred_list.append({
+                                "image_id": int(img_id[i]),
+                                "bbox": [x_min, y_min, width, height],
+                                "score": score,
+                                "category_id": digit
                             })
+
+                            detections.append({"x_min": x_min, "digit": digit})
+
+                            if draw:
+                                draw_pred.append({
+                                    "bbox": [x_min, y_min, x_max, y_max],
+                                    "category_id": digit-1,
+                                    "score": score
+                                })
 
                     if detections:
                         detections.sort(key=lambda d: d["x_min"])  # sort by x_min
@@ -371,9 +455,7 @@ class ModelTrainer:
                     
                     if(draw):
                         visualize_predictions(img[i], img_id[i], target[i], draw_pred, writer, epoch)
-
-                    
-
+                        
 
         # update scheduler
         self.scheduler.step(total_loss / len(data_loader))
@@ -387,7 +469,6 @@ class ModelTrainer:
         df.to_csv(csv_path, index=False)
 
 
-        # return total_loss / len(data_loader), total_acc / len(data_loader)
         return total_loss / len(data_loader)
 
                 
@@ -401,8 +482,7 @@ class ModelTrainer:
 
         for img, img_id in pbar:
 
-            # img = img.to(self.device)
-            img = [imgi.to("cuda:0") for imgi in img]
+            img = [imgi.to(self.device) for imgi in img]
 
             output = self.model(img)
             
@@ -414,15 +494,15 @@ class ModelTrainer:
                     height = y_max - y_min
                     digit = output[i]["labels"][j].item()
                     score = output[i]["scores"][j].item()
+                    if score > self.args.score_threshold:
+                        pred_list.append({
+                            "image_id": int(img_id[i]),
+                            "bbox": [x_min, y_min, width, height],
+                            "score": score,
+                            "category_id": digit
+                        })
 
-                    pred_list.append({
-                        "image_id": int(img_id[i]),
-                        "bbox": [x_min, y_min, width, height],
-                        "score": score,
-                        "category_id": digit
-                    })
-
-                    detections.append({"x_min": x_min, "digit": digit})
+                        detections.append({"x_min": x_min, "digit": digit})
 
                 if detections:
                     detections.sort(key=lambda d: d["x_min"])  # sort by x_min
@@ -431,9 +511,6 @@ class ModelTrainer:
                     pred_value = -1
 
                 pred_value_list.append([int(img_id[i]), pred_value])
-
-        
-
 
         # Transform to DataFrame and save as json
         with open(json_path, "w", encoding="utf-8") as f:
@@ -447,7 +524,13 @@ class ModelTrainer:
     def calculate_mAP(self, pred_file, ground_truth_file):
         # 建立 COCO 實例
         coco_gt = COCO(ground_truth_file)
-        coco_dt = coco_gt.loadRes(pred_file)
+        # coco_dt = coco_gt.loadRes(pred_file)
+
+        try:
+            coco_dt = coco_gt.loadRes(pred_file)
+        except IndexError:
+            print("No valid annotations in predictions, skipping evaluation.")
+            return 0.0
 
         # 計算 mAP
         coco_eval = COCOeval(coco_gt, coco_dt, iouType='bbox')

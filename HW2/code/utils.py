@@ -102,11 +102,7 @@ class TestDataset(Dataset):
         self.image_paths = os.listdir(data_dir)
         self.transform = transforms.Compose(
             [
-                # transforms.Resize((224, 224)),
                 transforms.ToTensor(),
-                # transforms.Normalize(
-                #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                # ),
             ]
         )
 
@@ -128,7 +124,6 @@ def collate_fn(batch):
 
 def collate_fn_test(batch):
     images, id = zip(*batch)  # 拆分圖像與標註
-    id = torch.stack(id, 0)  # 圖像 id shape 相同，可直接 stack
     return images, id
 
 def create_folder_if_not_exists(folder_path):

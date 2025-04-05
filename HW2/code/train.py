@@ -105,7 +105,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        default="fasterrcnn_resnet50_fpn_v2",
+        default="fasterrcnn_resnet50_fpn",
         help="Model name."
     )
     parser.add_argument(
@@ -143,6 +143,12 @@ if __name__ == "__main__":
         type=float,
         default=0.1,
         help="Factor for ReduceLROnPlateau."
+    )
+    parser.add_argument(
+        "--score_threshold",
+        type=float,
+        default=0.1,
+        help="Score threshold for prediction."
     )
 
     parser.add_argument(
@@ -184,9 +190,9 @@ if __name__ == "__main__":
     utils.create_folder_if_not_exists(args.img_path)
 
     # define transform for training and validation
-        # create model and compute the number of parameters
+    # create model and compute the number of parameters
     myModel = model.ModelTrainer(
-        model_name="fasterrcnn_resnet50_fpn_v2",
+        model_name=args.model_name,
         num_classes=args.num_classes,
         lr=args.lr,
         min_lr=args.min_lr,
@@ -194,28 +200,19 @@ if __name__ == "__main__":
         factor=args.factor,
         args=args,
     )
-    # train_transform = myModel.model.transform
-    # val_transform = myModel.model.transform
 
     train_transform = transforms.Compose(
         [
-            # transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
-            # transforms.RandomRotation(degrees=10),
             # transforms.ColorJitter(
             #     brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2
             # ),
             transforms.ToTensor(),
-            # transforms.Normalize(
-            #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            # ),  # Normalize
         ]
     )
 
     val_transform = transforms.Compose(
         [
-            # transforms.Resize((224, 224)),
             transforms.ToTensor(),
-            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
     )
 
@@ -337,15 +334,15 @@ if __name__ == "__main__":
         folder_path=args.img_path,
         if_label=False,
     )
-    # utils.show_process(
-    #     data=np.array([train_loss_proc, val_loss_proc]),
-    #     xname="Epochs",
-    #     yname="Loss",
-    #     labels=np.array(["Train", "Valid"]),
-    #     file_name="Training_Validation",
-    #     folder_path=args.img_path,
-    #     if_label=True,
-    # )
+    utils.show_process(
+        data=np.array([train_loss_proc, val_loss_proc]),
+        xname="Epochs",
+        yname="Loss",
+        labels=np.array(["Train", "Valid"]),
+        file_name="Training_Validation",
+        folder_path=args.img_path,
+        if_label=True,
+    )
 
     # close tensorboard
     writer.close()

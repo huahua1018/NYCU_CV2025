@@ -52,7 +52,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        default="../checkpoints/model_fasterrcnn_resnet50_fpn_v2_bs_16_epochs_20_lr_0.001_wd_0.001_factor_0.1_minlr_1e-06/mAP_best.pt",
+        default="../checkpoints/model_SwinTransformer_bs_8_epochs_20_lr_0.0001_wd_0.001_factor_0.1_minlr_1e-06/mAP_best.pt",
         help="Path to checkpoint file.",
     )
     parser.add_argument(
@@ -91,6 +91,13 @@ if __name__ == "__main__":
         default=11,
         help="Number of classes."
     )
+    parser.add_argument(
+        "--score_threshold",
+        type=float,
+        default=0.5,
+        help="Score threshold for prediction."
+    )
+
     args = parser.parse_args()
 
     # set seed
@@ -114,63 +121,14 @@ if __name__ == "__main__":
 
 
     myModel = model.ModelTrainer(
-        model_name="fasterrcnn_resnet50_fpn_v2",
+        model_name=args.model_name,
         num_classes=args.num_classes,
         args=args,
     )
 
     myModel.model.load_state_dict(torch.load(args.ckpt_path))
-    # myModel.model.eval()
     myModel.model.to(args.device)
     myModel.test(test_loader, json_path, csv_path)
-
-
-
-    # pred_list = []  # task 1
-    # pred_value_list = []  # task 2
-
-    # pbar = tqdm(test_loader, ncols=120, desc="Predicting on data", unit="batch")
-    # for img, img_name in pbar:
-    #     img = img.to(args.device)
-        
-    #     output = myModel.model(img) 
-    #     img_name = int(img_name[0])
-
-    #     detections = []
-    #     for j in range(len(output[0]["boxes"])):
-    #         x_min, y_min, x_max, y_max = output[0]["boxes"][j].tolist()
-    #         width = x_max - x_min
-    #         height = y_max - y_min
-    #         digit = output[0]["labels"][j].item()
-    #         score = output[0]["scores"][j].item()
-
-    #         pred_list.append({
-    #             "image_id": img_name,
-    #             "bbox": [x_min, y_min, width, height],
-    #             "score": score,
-    #             "category_id": digit
-    #         })
-
-            
-    #         detections.append({"x_min": x_min, "digit": digit})
-
-    #     if detections:
-    #         detections.sort(key=lambda d: d["x_min"])  # sort by x_min
-    #         pred_value = int("".join(str(d["digit"] - 1) for d in detections))
-    #     else:
-    #         pred_value = -1
-
-    #     pred_value_list.append([img_name, pred_value])
-
-    # # Transform to DataFrame and save as json
-    # json_path = os.path.join(save_dir, "pred.json")
-    # with open(json_path, "w", encoding="utf-8") as f:
-    #     json.dump(pred_list, f, indent=4)
-
-    # # Transform to DataFrame and save as CSV
-    # csv_path = os.path.join(save_dir, "pred.csv")
-    # df = pd.DataFrame(pred_value_list, columns=["image_id", "pred_label"])
-    # df.to_csv(csv_path, index=False)
 
     # Create a zip file containing the JSON and CSV files
     zip_filename = os.path.join(save_dir, f"{model_name}.zip")
