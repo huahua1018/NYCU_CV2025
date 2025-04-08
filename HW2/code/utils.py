@@ -97,14 +97,10 @@ class TestDataset(Dataset):
         image_paths (list): A list of file names for the test images.
         transform (callable): A function/transform applied to the images before returning them.
     """
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, transform=None):
         self.data_dir = data_dir
         self.image_paths = os.listdir(data_dir)
-        self.transform = transforms.Compose(
-            [
-                transforms.ToTensor(),
-            ]
-        )
+        self.transform = transform
 
     def __len__(self):
         return len(self.image_paths)
@@ -112,7 +108,8 @@ class TestDataset(Dataset):
     def __getitem__(self, idx):
         img_path = os.path.join(self.data_dir, self.image_paths[idx])
         image = Image.open(img_path).convert("RGB")
-        image = self.transform(image)
+        if self.transform:
+            image = self.transform(image)
         img_name = os.path.splitext(self.image_paths[idx])[0]
         return image, img_name  # return img, img name
 

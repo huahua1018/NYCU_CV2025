@@ -31,8 +31,6 @@ import json
 
 from utils import visualize_predictions
 
-from torchvision.ops.feature_pyramid_network import LastLevelMaxPool
-
 class SwinBackboneWithFPN(nn.Module):
     """
     Adds a FPN on top of a model.
@@ -84,7 +82,7 @@ class SwinBackboneWithFPN(nn.Module):
         x = self.fpn(x)
         return x
 
-def _swin_extractor(
+def _swin_fpn_extractor(
     trainable_layers: int,
     returned_layers: Optional[List[int]] = None,
     extra_blocks: Optional[nn.Module] = None,
@@ -253,7 +251,6 @@ class ModelTrainer:
         min_lr=1e-6,
         weight_decay=1e-4,
         factor=0.1,
-        loss_lambda=10,
         args=None,
     ):
         """
@@ -263,71 +260,73 @@ class ModelTrainer:
         
         #---------------------------- Pytorch ---------------------------------------#
         
-        base_model = ModelFactory.get_model(model_name, num_classes)
+        # base_model = ModelFactory.get_model(model_name, num_classes)
 
-        self.model = FasterRCNN(
-            backbone=base_model.backbone,
-            num_classes=num_classes,
-            rpn_anchor_generator=base_model.rpn.anchor_generator,
-            box_roi_pool=base_model.roi_heads.box_roi_pool,
-            rpn_pre_nms_top_n_train=2000,
-            rpn_pre_nms_top_n_test=2000,
-            rpn_post_nms_top_n_train=2000,
-            rpn_post_nms_top_n_test=2000,
-        )
+        # self.model = FasterRCNN(
+        #     backbone=base_model.backbone,
+        #     num_classes=num_classes,
+        #     rpn_anchor_generator=base_model.rpn.anchor_generator,
+        #     box_roi_pool=base_model.roi_heads.box_roi_pool,
+        #     rpn_pre_nms_top_n_train=2000,
+        #     rpn_pre_nms_top_n_test=1000,
+        #     rpn_post_nms_top_n_train=2000,
+        #     rpn_post_nms_top_n_test=1000,
+        # )
 
-        # 設定 model 的 RPN、ROI 頭部
-        self.model.rpn = base_model.rpn
-        self.model.roi_heads = base_model.roi_heads
-        self.model.transform = base_model.transform
+        # # 設定 model 的 RPN、ROI 頭部
+        # self.model.rpn = base_model.rpn
+        # self.model.roi_heads = base_model.roi_heads
+        # self.model.transform = base_model.transform
 
-        in_features = self.model.roi_heads.box_predictor.cls_score.in_features
-        self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-        self.model.to(self.device)
+        # in_features = self.model.roi_heads.box_predictor.cls_score.in_features
+        # self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+        # self.model.to(self.device)
         #---------------------------- Pytorch ---------------------------------------#
         
 
         #---------------------------- Custom ---------------------------------------#
-        # # Swin Transformer 作為 backbone
-        # backbone = _swin_extractor(trainable_layers=3)
+        # Swin Transformer 作為 backbone
+        backbone = _swin_fpn_extractor(trainable_layers=3, norm_layer=nn.BatchNorm2d)
 
-        # anchor_sizes = (
-        #     (
-        #         8,
-        #         16,
-        #         32,
-        #         64,
-        #         128,
-        #         256,
-        #         512,
-        #     ),
-        # ) * 3
+        anchor_sizes = (
+            (
+                8,
+                16,
+                32,
+                64,
+                128,
+                256,
+                512,
+            ),
+        ) * 3
         
-        # # anchor_sizes = ((8, 16,), (32, 64,), (128, 256))
-        # aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+        # anchor_sizes = ((8, 16,), (32, 64,), (128, 256))
+        aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
 
-        # anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
+        anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
         
 
-        # # # ROI Pooling 設定
-        # # roi_pooler = torchvision.ops.MultiScaleRoIAlign(
-        # #     featmap_names=["0"],  # 只使用主要特徵圖
-        # #     output_size=7,
-        # #     sampling_ratio=2
-        # # )
-
-        # # 設定 Faster R-CNN
-        # self.model = FasterRCNN(
-        #     backbone,
-        #     num_classes=num_classes,  # 數字 0~9 + 背景
-        #     rpn_anchor_generator=anchor_generator,
-        #     # box_roi_pool=roi_pooler
-        #     rpn_pre_nms_top_n_train=2000,
-        #     rpn_pre_nms_top_n_test=2000,
-        #     rpn_post_nms_top_n_train=2000,
-        #     rpn_post_nms_top_n_test=2000,
+        # # ROI Pooling 設定
+        # roi_pooler = torchvision.ops.MultiScaleRoIAlign(
+        #     featmap_names=["0"],  # 只使用主要特徵圖
+        #     output_size=7,
+        #     sampling_ratio=2
         # )
-        # self.model.to(self.device)
+
+        # 設定 Faster R-CNN
+        self.model = FasterRCNN(
+            backbone,
+            num_classes=num_classes,  # 數字 0~9 + 背景
+            min_size = args.min_size,
+            max_size = args.max_size,
+            rpn_anchor_generator=anchor_generator,
+            # box_roi_pool=roi_pooler
+            rpn_pre_nms_top_n_train=2000,
+            rpn_pre_nms_top_n_test=1000,
+            rpn_post_nms_top_n_train=2000,
+            rpn_post_nms_top_n_test=1000,
+        )
+        self.model.to(self.device)
         #---------------------------- Custom ---------------------------------------#
 
 
@@ -337,7 +336,6 @@ class ModelTrainer:
         self.min_lr = min_lr
         self.weight_decay = weight_decay
         self.factor = factor
-        self.loss_lambda = loss_lambda
         self.optim, self.scheduler = self.configure_optimizers()
 
     def train_one_epoch(self, data_loader, epoch):
@@ -353,6 +351,10 @@ class ModelTrainer:
         """
         self.model.train()
         total_loss = 0
+        obj_loss = 0
+        rpn_loss = 0
+        cls_loss = 0
+        box_loss = 0
         pbar = tqdm(data_loader, ncols=120, desc=f"Epoch {epoch}")
 
         for img, img_id, target in pbar:
@@ -365,9 +367,16 @@ class ModelTrainer:
 
             # 前向傳播，傳遞圖像和標註
             loss_dict = self.model(img, target)  # 這裡傳入圖像和標註
+            
             # 計算損失
-            losses = loss_dict["loss_classifier"] + self.loss_lambda*loss_dict["loss_box_reg"]
+            losses = sum(loss for loss in loss_dict.values())
             total_loss += losses.item()
+            
+            obj_loss += loss_dict["loss_objectness"].item()
+            rpn_loss += loss_dict["loss_rpn_box_reg"].item()
+            cls_loss += loss_dict["loss_classifier"].item()
+            box_loss += loss_dict["loss_box_reg"].item()
+
             losses.backward()
             self.optim.step()
 
@@ -375,7 +384,7 @@ class ModelTrainer:
             lr = self.optim.param_groups[0]["lr"]
             pbar.set_postfix(loss=losses.item(), lr=lr)
 
-        return total_loss / len(data_loader), lr
+        return total_loss / len(data_loader), obj_loss / len(data_loader), rpn_loss / len(data_loader), cls_loss / len(data_loader), box_loss / len(data_loader), lr
 
     def eval_one_epoch(self, data_loader, epoch, json_path, csv_path, writer):
         """
@@ -393,6 +402,10 @@ class ModelTrainer:
         pred_list = []  # task 1
         pred_value_list = []  # task 2
         total_loss = 0
+        obj_loss = 0
+        rpn_loss = 0
+        cls_loss = 0
+        box_loss = 0
 
         self.model.eval()
         pbar = tqdm(data_loader, ncols=120, desc=f"Epoch {epoch}", unit="batch")
@@ -407,8 +420,13 @@ class ModelTrainer:
                 loss_dict, output = eval_forward(self.model, img, target)
 
                 # 計算損失
-                losses = loss_dict["loss_classifier"] + self.loss_lambda*loss_dict["loss_box_reg"]
-                total_loss += losses.item()    
+                losses = sum(loss for loss in loss_dict.values())
+                total_loss += losses.item()
+                
+                obj_loss += loss_dict["loss_objectness"].item()
+                rpn_loss += loss_dict["loss_rpn_box_reg"].item()
+                cls_loss += loss_dict["loss_classifier"].item()
+                box_loss += loss_dict["loss_box_reg"].item()
 
                 lr = self.optim.param_groups[0]["lr"]
                 pbar.set_postfix(loss=losses.item(), lr=lr)
@@ -455,7 +473,6 @@ class ModelTrainer:
                     
                     if(draw):
                         visualize_predictions(img[i], img_id[i], target[i], draw_pred, writer, epoch)
-                        
 
         # update scheduler
         self.scheduler.step(total_loss / len(data_loader))
@@ -469,10 +486,10 @@ class ModelTrainer:
         df.to_csv(csv_path, index=False)
 
 
-        return total_loss / len(data_loader)
+        return total_loss / len(data_loader), obj_loss / len(data_loader), rpn_loss / len(data_loader), cls_loss / len(data_loader), box_loss / len(data_loader)
 
                 
-    def test(self, data_loader, json_path, csv_path):
+    def test(self, data_loader, json_path, csv_path, score_threshold, value_threshold):
 
         pred_list = []  # task 1
         pred_value_list = []  # task 2
@@ -494,14 +511,14 @@ class ModelTrainer:
                     height = y_max - y_min
                     digit = output[i]["labels"][j].item()
                     score = output[i]["scores"][j].item()
-                    if score > self.args.score_threshold:
+                    if score > score_threshold:
                         pred_list.append({
                             "image_id": int(img_id[i]),
                             "bbox": [x_min, y_min, width, height],
                             "score": score,
                             "category_id": digit
                         })
-
+                    if score > value_threshold:
                         detections.append({"x_min": x_min, "digit": digit})
 
                 if detections:

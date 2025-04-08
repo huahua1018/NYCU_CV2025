@@ -5,6 +5,12 @@ It loads data, applies transformations, initializes the model, trains it,
 and record performance.
 """
 
+"""
+norm batch norm
+resize (200, 800)
+mean std *
+CLAHEandSharpen (random use for train, fixed for val, test?)
+"""
 import os
 import argparse
 import random
@@ -17,6 +23,7 @@ from torchvision import transforms
 
 import utils
 import model
+from preprocess.CLAHEandSharpen import CLAHEandSharpen
 
 
 
@@ -105,8 +112,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        default="fasterrcnn_resnet50_fpn",
+        default="SwinTransformer_preS",
         help="Model name."
+    )    
+    parser.add_argument(
+        "--resize",
+        type=tuple,
+        default=(200, 800),
+        help="Resize the image to this size."
     )
     parser.add_argument(
         "--bs",
@@ -117,7 +130,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--epochs",
         type=int,
-        default=20,
+        default=18,
         help="Number of epochs to train."
     )
     parser.add_argument(
@@ -154,7 +167,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_per_epoch",
         type=int,
-        default=3,
+        default=1,
         help="Save CKPT per ** epochs"
     )
     parser.add_argument(
@@ -171,8 +184,7 @@ if __name__ == "__main__":
 
     # create log directory for tensorboard
     parm_dir = (f"model_{args.model_name}_bs_{args.bs}_epochs_{args.epochs}_"
-                f"lr_{args.lr}_wd_{args.weight_decay}_factor_{args.factor}_"
-            f"minlr_{args.min_lr}")
+                f"resize_{args.resize[0]}_{args.resize[1]}")
     log_dir = os.path.join("runs", parm_dir)
 
     # create folder if not exists
@@ -203,15 +215,14 @@ if __name__ == "__main__":
 
     train_transform = transforms.Compose(
         [
-            # transforms.ColorJitter(
-            #     brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2
-            # ),
+            CLAHEandSharpen(random=0.5),
             transforms.ToTensor(),
         ]
     )
 
     val_transform = transforms.Compose(
         [
+            CLAHEandSharpen(random=0),
             transforms.ToTensor(),
         ]
     )
@@ -269,9 +280,9 @@ if __name__ == "__main__":
 
     for epoch in range(args.start_from_epoch + 1, args.epochs + 1):
 
-        train_loss, train_lr = myModel.train_one_epoch(train_loader, epoch)
-        
-        val_loss = myModel.eval_one_epoch(val_loader, epoch, json_path, csv_path, writer)
+        # train_loss, train_lr = myModel.train_one_epoch(train_loader, epoch)
+        train_loss, train_obj_loss, train_rpn_loss, train_cls_loss, train_box_loss, train_lr = myModel.train_one_epoch(train_loader, epoch)
+        val_loss, val_obj_loss, val_rpn_loss, val_cls_loss, val_box_loss = myModel.eval_one_epoch(val_loader, epoch, json_path, csv_path, writer)
         mAP = myModel.calculate_mAP(
             pred_file=json_path,
             ground_truth_file=args.val_json_path,
@@ -286,9 +297,22 @@ if __name__ == "__main__":
         # write to tensorboard
         writer.add_scalar("Loss/train", train_loss, epoch)
         writer.add_scalar("Loss/valid", val_loss, epoch)
+        writer.add_scalar("Objectness Loss/train", train_obj_loss, epoch)
+        writer.add_scalar("Objectness Loss/valid", val_obj_loss, epoch)
+        writer.add_scalar("RPN Loss/train", train_rpn_loss, epoch)
+        writer.add_scalar("RPN Loss/valid", val_rpn_loss, epoch)
+        writer.add_scalar("Classification Loss/train", train_cls_loss, epoch)
+        writer.add_scalar("Classification Loss/valid", val_cls_loss, epoch)
+        writer.add_scalar("Box Loss/train", train_box_loss, epoch)
+        writer.add_scalar("Box Loss/valid", val_box_loss, epoch)
         writer.add_scalar("mAP/valid", mAP, epoch)
         writer.add_scalar("Learning Rate", train_lr, epoch)
+        
         writer.add_scalars("Loss", {"train": train_loss, "valid": val_loss}, epoch)
+        writer.add_scalars("Objectness Loss", {"train": train_obj_loss, "valid": val_obj_loss}, epoch)
+        writer.add_scalars("RPN Loss", {"train": train_rpn_loss, "valid": val_rpn_loss}, epoch)
+        writer.add_scalars("Classification Loss", {"train": train_cls_loss, "valid": val_cls_loss}, epoch)
+        writer.add_scalars("Box Loss", {"train": train_box_loss, "valid": val_box_loss}, epoch)
 
         # save the model
         if epoch % args.save_per_epoch == 0:
