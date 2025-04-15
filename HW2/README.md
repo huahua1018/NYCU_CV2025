@@ -34,15 +34,16 @@ Place **nycu-hw2-data** folder at the same level as the **code** folder.
 
 ## Usage
 ### Hyperparameters
-
-| Batch size       | 8                   |
-| Epochs           | 18                  |
-| Learning rate    | 1e-4                |
-| Min learning rate| 1e-6                |
-| Optimizer        | AdamW               |
-| Weight decay     | 1e-3                |
-| Scheduler        | ReduceLROnPlateau   |
-| Factor           | 0.1                 |
+|Hyperparameter    | Value               |
+|------------------|---------------------|
+|model_name        |fasterrcnn_swin_t_fpn|
+| bs               | 8                   |
+| epochs           | 18                  |
+| lr               | 1e-4                |
+| min_lr           | 1e-6                |
+| weight_decay     | 1e-3                |
+| factor           | 0.1                 |
+|score_threshold   | 0.1                 |
 
 
 First, you need to navigate to the folder where our code is located in order to execute the train and test commands.
