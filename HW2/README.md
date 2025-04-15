@@ -32,9 +32,10 @@ pip install -r requirements.txt
 ### Step 2 : Dataset Preparation
 Place **nycu-hw2-data** folder at the same level as the **code** folder.
 
-project_root/ <br>
-├── code/ <br>
-├── nycu-hw2-data / <br>
+>project_root/ <br>
+>├── code/ <br>
+>├── nycu-hw2-data / <br>
+>└── README.md
 
 ## Usage
 ### Hyperparameters
