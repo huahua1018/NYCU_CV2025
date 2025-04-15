@@ -17,33 +17,37 @@ import cv2
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from torchvision import transforms
 from torch.utils.data import Dataset
 from PIL import Image
 
 
 class TrainDataset(Dataset):
     """
-    A custom dataset class for loading training images.
+    A custom dataset class for loading training and validation images with labels.
     """
+
     def __init__(self, json_path, img_dir, transform=None):
         """
-        :param json_path: path to the JSON file containing image annotations
-        :param img_dir: directory containing the images
-        :param transform: transformations to be applied to the images
+        Initialize the dataset.
+
+        :param json_path: Path to the JSON file containing image annotations.
+        :param img_dir: Directory containing the images.
+        :param transform: Transformations to be applied to the images.
         """
         self.img_dir = img_dir
         self.transform = transform
 
-        # read the JSON file
-        with open(json_path, 'r') as f:
+        # Read the JSON file
+        with open(json_path, "r") as f:
             self.data = json.load(f)
-        
-        # create a mapping from image id to file name
-        self.img_id_to_name = {img["id"]: img["file_name"] for img in self.data["images"]}
+
+        # Create a mapping from image id to file name
+        self.img_id_to_name = {
+            img["id"]: img["file_name"] for img in self.data["images"]
+        }
         self.image_ids = list(self.img_id_to_name.keys())
-        
-        # create a mapping from image id to annotations,
+
+        # Create a mapping from image id to annotations,
         # ensuring that annotations for the same image are grouped together
         self.img_id_to_anns = {}
         for ann in self.data["annotations"]:
@@ -53,9 +57,22 @@ class TrainDataset(Dataset):
             self.img_id_to_anns[img_id].append(ann)
 
     def __len__(self):
+        """
+        Return the total number of images in the dataset.
+        """
         return len(self.image_ids)
 
     def __getitem__(self, idx):
+        """
+        Get the image and its annotations at the given index.
+
+        :param idx: Index of the image to retrieve.
+
+        :return: A tuple (image, image_id, target), where:
+            - image is the transformed image.
+            - image_id is the ID of the image.
+            - target is a dictionary containing 'boxes' and 'labels' for the image.
+        """
         img_id = self.image_ids[idx]
         img_name = self.img_id_to_name[img_id]
         img_path = os.path.join(self.img_dir, img_name)
@@ -65,7 +82,7 @@ class TrainDataset(Dataset):
         bboxes = []
         labels = []
         for ann in self.img_id_to_anns.get(img_id, []):
-            bboxes.append(ann["bbox"])  # bbox : [x, y, w, h]
+            bboxes.append(ann["bbox"])  # bbox: [x, y, w, h]
             labels.append(ann["category_id"])
 
         bboxes = torch.tensor(bboxes, dtype=torch.float32)
@@ -73,17 +90,17 @@ class TrainDataset(Dataset):
         bboxes[:, 3] += bboxes[:, 1]  # y + h
         labels = torch.tensor(labels, dtype=torch.int64)
 
-        # 建立 PyTorch Faster R-CNN 所需的 target 格式
+        # Construct the target format required by PyTorch Faster R-CNN
         target = {
-            "boxes": bboxes,   # (N, 4) 的 tensor
-            "labels": labels   # (N,) 的 tensor
+            "boxes": bboxes,  # Tensor of shape (N, 4)
+            "labels": labels,  # Tensor of shape (N,)
         }
 
-        # 套用 transforms
+        # Apply transformations if specified
         if self.transform:
             image = self.transform(image)
 
-        # id to tensor
+        # Convert image ID to tensor
         img_id = torch.tensor(img_id, dtype=torch.int64)
         return image, img_id, target
 
@@ -97,31 +114,69 @@ class TestDataset(Dataset):
         image_paths (list): A list of file names for the test images.
         transform (callable): A function/transform applied to the images before returning them.
     """
+
     def __init__(self, data_dir, transform=None):
+        """
+        Initializes the dataset.
+
+        :param data_dir: Directory where the test images are stored.
+        :param transform: Optional transformation to be applied to the images.
+        """
         self.data_dir = data_dir
         self.image_paths = os.listdir(data_dir)
         self.transform = transform
 
     def __len__(self):
+        """
+        Return the total number of test images in the dataset.
+        """
         return len(self.image_paths)
 
     def __getitem__(self, idx):
+        """
+        Retrieve the image at the given index.
+
+        :param idx: Index of the image to retrieve.
+
+        :return: A tuple (image, image_name), where:
+            - image is the transformed test image.
+            - image_name is the name of the image file (without extension).
+        """
         img_path = os.path.join(self.data_dir, self.image_paths[idx])
         image = Image.open(img_path).convert("RGB")
+
+        # Apply transformations if specified
         if self.transform:
             image = self.transform(image)
+
+        # Extract image name without extension
         img_name = os.path.splitext(self.image_paths[idx])[0]
-        return image, img_name  # return img, img name
+
+        return image, img_name  # Return the transformed image and image name
+
 
 def collate_fn(batch):
-    images, id, targets = zip(*batch)  # 拆分圖像與標註    
-    id = torch.stack(id, 0)  # 圖像 id shape 相同，可直接 stack
+    """
+    Custom collate function for training or validation.
+    """
+    # Unpack the batch into images, ids, and targets
+    images, ids, targets = zip(*batch)
 
-    return images, id, targets
+    # IDs can be stacked directly since they are of the same shape
+    ids = torch.stack(ids, 0)
+
+    return images, ids, targets
+
 
 def collate_fn_test(batch):
-    images, id = zip(*batch)  # 拆分圖像與標註
-    return images, id
+    """
+    Custom collate function for the test set.
+    """
+    # Unpack the batch into images and ids (no targets for test set)
+    images, ids = zip(*batch)
+
+    return images, ids
+
 
 def create_folder_if_not_exists(folder_path):
     """
@@ -186,45 +241,75 @@ def show_process(
 
 
 def visualize_predictions(image, id, targets, pred_list, writer, epoch):
-    # 1. 原始圖像
-    img_with_boxes = image.permute(1, 2, 0).cpu().numpy()  # [C, H, W] -> [H, W, C]
+    """ "
+    Visualizes the predictions on the image and logs it to TensorBoard in validation.
+
+    Args:
+        image (torch.Tensor): The input image tensor of shape [C, H, W].
+        id (int): The image ID.
+        targets (dict): The ground truth targets containing bounding boxes and labels.
+        pred_list (list): List of predicted bounding boxes and labels.
+        writer (SummaryWriter): TensorBoard writer for logging the image.
+        epoch (int): Current epoch number.
+    """
+    # 1. Convert image tensor from [C, H, W] to [H, W, C] and to numpy array for OpenCV
+    img_with_boxes = image.permute(1, 2, 0).cpu().numpy()
     img_with_boxes = np.ascontiguousarray(img_with_boxes)
 
-    # 2. 預測結果 (這裡的 pred_list 是您提供的每個預測結果列表)
+    # 2. Draw predicted bounding boxes (from pred_list)
     for pred in pred_list:
-        xmin, ymin, xmax, ymax = pred['bbox']
-        
-        # 畫出預測框
-        cv2.rectangle(img_with_boxes, 
-                      (int(xmin), int(ymin)), 
-                      (int(xmax), int(ymax)), 
-                      (255, 0, 0), 1)  # 用藍色畫框
-        cv2.putText(img_with_boxes, 
-                    f"{pred['category_id']}:{pred['score']:.2f}", 
-                    (int(xmin), int(ymin)-2), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 
-                    0.3, (255, 255, 255), 1)
+        xmin, ymin, xmax, ymax = pred["bbox"]
 
-    # 3. Ground truth 真實標註
-    gt_boxes = targets['boxes']
-    gt_labels = targets['labels']
-    
-    # 畫出真實框
+        # Draw predicted box in blue
+        cv2.rectangle(
+            img_with_boxes,
+            (int(xmin), int(ymin)),
+            (int(xmax), int(ymax)),
+            (255, 0, 0),  # Blue
+            1,
+        )
+
+        # Put predicted class id and score above the box
+        cv2.putText(
+            img_with_boxes,
+            f"{pred['category_id']}:{pred['score']:.2f}",
+            (int(xmin), int(ymin) - 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.3,
+            (255, 255, 255),  # White text
+            1,
+        )
+
+    # 3. Draw ground truth bounding boxes from targets
+    gt_boxes = targets["boxes"]
+    gt_labels = targets["labels"]
+
     for box, label in zip(gt_boxes, gt_labels):
         xmin, ymin, xmax, ymax = box
-        cv2.rectangle(img_with_boxes, 
-                      (int(xmin), int(ymin)), 
-                      (int(xmax), int(ymax)), 
-                      (0, 255, 0), 1)  # 用綠色畫框
-        cv2.putText(img_with_boxes, 
-                    f"{label.item()-1}",
-                    (int(xmin), int(ymin)-2), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 
-                    0.3, (0, 255, 0), 1)
 
-    # 轉換回 [C, H, W] 並將圖像數據範圍從 [0, 255] -> [0.0, 1.0]
+        # Draw ground truth box in green
+        cv2.rectangle(
+            img_with_boxes,
+            (int(xmin), int(ymin)),
+            (int(xmax), int(ymax)),
+            (0, 255, 0),  # Green
+            1,
+        )
+
+        # Put ground truth label above the box (label starts from 1)
+        cv2.putText(
+            img_with_boxes,
+            f"{label.item()-1}",
+            (int(xmin), int(ymin) - 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.3,
+            (0, 255, 0),  # Green text
+            1,
+        )
+
+    # 4. Convert image back to tensor format [C, H, W] for TensorBoard logging
     img_with_boxes_tensor = torch.from_numpy(img_with_boxes).permute(2, 0, 1).float()
 
-    # 4. 在 TensorBoard 上顯示圖片
+    # 5. Log the image to TensorBoard
     if writer is not None:
-        writer.add_image(f'val{id}_pred', img_with_boxes_tensor, epoch)
+        writer.add_image(f"val{id}_pred", img_with_boxes_tensor, epoch)

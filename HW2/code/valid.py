@@ -1,25 +1,27 @@
+"""
+This script is used to observe the performance of a trained model on validation data 
+with different thresholds.
+"""
+
 import random
 import argparse
-import zipfile
 import os
 
 import torch
 import numpy as np
-import pandas as pd
-import json
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 import utils
 import model
+
 
 # Set seed for reproducibility
 def setup_seed(seed):
     """
     Set the random seed for reproducibility across various libraries.
 
-    This function ensures that the random number generators for PyTorch, NumPy, and Python's 
-    built-in `random` module are initialized with the given seed. It also configures CUDA-related 
+    This function ensures that the random number generators for PyTorch, NumPy, and Python's
+    built-in `random` module are initialized with the given seed. It also configures CUDA-related
     settings to enhance reproducibility when using GPUs.
 
     Args:
@@ -45,18 +47,18 @@ if __name__ == "__main__":
         "--val_data_path",
         type=str,
         default="../nycu-hw2-data/valid/",
-        help="Testing Data Path"
+        help="Testing Data Path",
     )
     parser.add_argument(
         "--val_json_path",
         type=str,
         default="../nycu-hw2-data/valid.json",
-        help="Validation JSON Path"
+        help="Validation JSON Path",
     )
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        default="../checkpoints/model_SwinTransformer_bs_8_epochs_20_lr_0.0001_wd_0.001_factor_0.1_minlr_1e-06/epoch_18.pt",
+        default="../checkpoints/model/mAP_best.pt",
         help="Path to checkpoint file.",
     )
     parser.add_argument(
@@ -65,35 +67,16 @@ if __name__ == "__main__":
         default="../result/",
         help="Path to save the prediction result.",
     )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda:0",
-        help="Which device the training is on."
-    )
-    parser.add_argument(
-        "--num_workers",
-        type=int,
-        default=4,
-        help="Number of worker"
-    )
-    parser.add_argument(
-        "--bs",
-        type=int,
-        default=1,
-        help="Batch size for training."
-    )
+    parser.add_argument("--num_workers", type=int, default=4, help="Number of worker")
+    parser.add_argument("--bs", type=int, default=1, help="Batch size for training.")
     parser.add_argument(
         "--model_name",
         type=str,
         default="fasterrcnn_resnet50_fpn",
-        help="Model name to use for testing."
+        help="Model name to use for testing.",
     )
     parser.add_argument(
-        "--num_classes",
-        type=int,
-        default=11,
-        help="Number of classes."
+        "--num_classes", type=int, default=11, help="Number of classes."
     )
 
     args = parser.parse_args()
@@ -101,19 +84,18 @@ if __name__ == "__main__":
     # set seed
     setup_seed(118)
 
-    model_name = os.path.basename(os.path.dirname(args.ckpt_path)) 
+    model_name = os.path.basename(os.path.dirname(args.ckpt_path))
     save_dir = os.path.join(args.result_path, model_name, "val")
     os.makedirs(save_dir, exist_ok=True)
 
     val_dataset = utils.TestDataset(data_dir=args.val_data_path)
     val_loader = DataLoader(
-        val_dataset, 
-        batch_size=args.bs, 
-        shuffle=False, 
+        val_dataset,
+        batch_size=args.bs,
+        shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=utils.collate_fn_test
+        collate_fn=utils.collate_fn_test,
     )
-
 
     myModel = model.ModelTrainer(
         model_name=args.model_name,

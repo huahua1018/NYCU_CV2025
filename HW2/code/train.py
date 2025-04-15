@@ -5,12 +5,6 @@ It loads data, applies transformations, initializes the model, trains it,
 and record performance.
 """
 
-"""
-norm batch norm
-resize (200, 800)
-mean std *
-CLAHEandSharpen (random use for train, fixed for val, test?)
-"""
 import os
 import argparse
 import random
@@ -23,17 +17,15 @@ from torchvision import transforms
 
 import utils
 import model
-from preprocess.CLAHEandSharpen import CLAHEandSharpen
-
-
+from preprocess.clahe_and_sharpen import CLAHEandSharpen
 
 
 def setup_seed(seed):
     """
     Set the random seed for reproducibility across various libraries.
 
-    This function ensures that the random number generators for PyTorch, NumPy, and Python's 
-    built-in `random` module are initialized with the given seed. It also configures CUDA-related 
+    This function ensures that the random number generators for PyTorch, NumPy, and Python's
+    built-in `random` module are initialized with the given seed. It also configures CUDA-related
     settings to enhance reproducibility when using GPUs.
 
     Args:
@@ -51,6 +43,7 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Digit Recognition")
 
@@ -58,25 +51,25 @@ if __name__ == "__main__":
         "--train_data_path",
         type=str,
         default="../nycu-hw2-data/train/",
-        help="Training Data Path"
+        help="Training Data Path",
     )
     parser.add_argument(
         "--train_json_path",
         type=str,
         default="../nycu-hw2-data/train.json",
-        help="Training JSON Path"
+        help="Training JSON Path",
     )
     parser.add_argument(
         "--val_data_path",
         type=str,
         default="../nycu-hw2-data/valid/",
-        help="Validation Data Path"
+        help="Validation Data Path",
     )
     parser.add_argument(
         "--val_json_path",
         type=str,
         default="../nycu-hw2-data/valid.json",
-        help="Validation JSON Path"
+        help="Validation JSON Path",
     )
     parser.add_argument(
         "--ckpt_path",
@@ -85,77 +78,37 @@ if __name__ == "__main__":
         help="Path to checkpoint folder.",
     )
     parser.add_argument(
-        "--img_path",
-        type=str,
-        default="../result/",
-        help="Path to save the image."
+        "--img_path", type=str, default="../result/", help="Path to save the image."
     )
+    parser.add_argument("--num_workers", type=int, default=4, help="Number of worker")
     parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda:0",
-        help="Which device the training is on."
-    )
-    parser.add_argument(
-        "--num_workers",
-        type=int,
-        default=4,
-        help="Number of worker"
-    )
-    parser.add_argument(
-        "--num_classes",
-        type=int,
-        default=11,
-        help="Number of classes."
+        "--num_classes", type=int, default=11, help="Number of classes."
     )
 
     parser.add_argument(
         "--model_name",
         type=str,
-        default="SwinTransformer_preS",
-        help="Model name."
-    )    
+        default="fasterrcnn_swin_t_fpn",
+        help="Model name.",
+        choices=[
+            "fasterrcnn_resnet50_fpn",
+            "fasterrcnn_resnet50_fpn_v2",
+            "fasterrcnn_swin_t_fpn",
+        ],
+    )
+    parser.add_argument("--bs", type=int, default=8, help="Batch size for training.")
     parser.add_argument(
-        "--resize",
-        type=tuple,
-        default=(200, 800),
-        help="Resize the image to this size."
+        "--epochs", type=int, default=18, help="Number of epochs to train."
+    )
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate.")
+    parser.add_argument(
+        "--min_lr", type=float, default=1e-6, help="Minimum learning rate."
     )
     parser.add_argument(
-        "--bs",
-        type=int,
-        default=8,
-        help="Batch size for training."
+        "--weight_decay", type=float, default=0.005, help="Weight decay."
     )
     parser.add_argument(
-        "--epochs",
-        type=int,
-        default=18,
-        help="Number of epochs to train."
-    )
-    parser.add_argument(
-        "--lr",
-        type=float,
-        default=1e-4,
-        help="Learning rate."
-    )
-    parser.add_argument(
-        "--min_lr",
-        type=float,
-        default=1e-6,
-        help="Minimum learning rate."
-    )
-    parser.add_argument(
-        "--weight_decay",
-        type=float,
-        default=0.001,
-        help="Weight decay."
-    )
-    parser.add_argument(
-        "--factor",
-        type=float,
-        default=0.1,
-        help="Factor for ReduceLROnPlateau."
+        "--factor", type=float, default=0.1, help="Factor for ReduceLROnPlateau."
     )
     parser.add_argument(
         "--score_threshold",
@@ -165,10 +118,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--save_per_epoch",
-        type=int,
-        default=1,
-        help="Save CKPT per ** epochs"
+        "--save_per_epoch", type=int, default=1, help="Save CKPT per ** epochs"
     )
     parser.add_argument(
         "--start_from_epoch",
@@ -181,10 +131,8 @@ if __name__ == "__main__":
     # set seed
     setup_seed(118)
 
-
     # create log directory for tensorboard
-    parm_dir = (f"model_{args.model_name}_bs_{args.bs}_epochs_{args.epochs}_"
-                f"resize_{args.resize[0]}_{args.resize[1]}")
+    parm_dir = f"model_{args.model_name}_bs_{args.bs}_epochs_{args.epochs}"
     log_dir = os.path.join("runs", parm_dir)
 
     # create folder if not exists
@@ -215,14 +163,14 @@ if __name__ == "__main__":
 
     train_transform = transforms.Compose(
         [
-            CLAHEandSharpen(random=0.5),
+            # CLAHEandSharpen(random_val=0.5),
             transforms.ToTensor(),
         ]
     )
 
     val_transform = transforms.Compose(
         [
-            CLAHEandSharpen(random=0),
+            # CLAHEandSharpen(random_val=0),
             transforms.ToTensor(),
         ]
     )
@@ -231,12 +179,12 @@ if __name__ == "__main__":
     train_dataset = utils.TrainDataset(
         json_path=args.train_json_path,
         img_dir=args.train_data_path,
-        transform=train_transform
+        transform=train_transform,
     )
     val_dataset = utils.TrainDataset(
         json_path=args.val_json_path,
         img_dir=args.val_data_path,
-        transform=val_transform
+        transform=val_transform,
     )
 
     # create DataLoader
@@ -249,12 +197,11 @@ if __name__ == "__main__":
     )
     val_loader = DataLoader(
         dataset=val_dataset,
-        batch_size=1, #-----------------------------
+        batch_size=1,
         shuffle=False,
         num_workers=args.num_workers,
         collate_fn=utils.collate_fn,
     )
-
 
     with open(f"{args.img_path}/model_architecture.txt", "w", encoding="utf-8") as f:
         print(
@@ -272,22 +219,29 @@ if __name__ == "__main__":
     highest_mAP = 0
     lowest_loss = 1000000
 
-    save_dir = os.path.join(args.img_path,"val")
+    save_dir = os.path.join(args.img_path, "val")
     utils.create_folder_if_not_exists(save_dir)
     json_path = os.path.join(save_dir, "pred.json")
     csv_path = os.path.join(save_dir, "pred.csv")
 
-
     for epoch in range(args.start_from_epoch + 1, args.epochs + 1):
 
         # train_loss, train_lr = myModel.train_one_epoch(train_loader, epoch)
-        train_loss, train_obj_loss, train_rpn_loss, train_cls_loss, train_box_loss, train_lr = myModel.train_one_epoch(train_loader, epoch)
-        val_loss, val_obj_loss, val_rpn_loss, val_cls_loss, val_box_loss = myModel.eval_one_epoch(val_loader, epoch, json_path, csv_path, writer)
+        (
+            train_loss,
+            train_obj_loss,
+            train_rpn_loss,
+            train_cls_loss,
+            train_box_loss,
+            train_lr,
+        ) = myModel.train_one_epoch(train_loader, epoch)
+        val_loss, val_obj_loss, val_rpn_loss, val_cls_loss, val_box_loss = (
+            myModel.eval_one_epoch(val_loader, epoch, json_path, csv_path, writer)
+        )
         mAP = myModel.calculate_mAP(
             pred_file=json_path,
             ground_truth_file=args.val_json_path,
         )
-
 
         # record the loss and accuracy
         train_loss_proc.append(train_loss)
@@ -307,12 +261,22 @@ if __name__ == "__main__":
         writer.add_scalar("Box Loss/valid", val_box_loss, epoch)
         writer.add_scalar("mAP/valid", mAP, epoch)
         writer.add_scalar("Learning Rate", train_lr, epoch)
-        
+
         writer.add_scalars("Loss", {"train": train_loss, "valid": val_loss}, epoch)
-        writer.add_scalars("Objectness Loss", {"train": train_obj_loss, "valid": val_obj_loss}, epoch)
-        writer.add_scalars("RPN Loss", {"train": train_rpn_loss, "valid": val_rpn_loss}, epoch)
-        writer.add_scalars("Classification Loss", {"train": train_cls_loss, "valid": val_cls_loss}, epoch)
-        writer.add_scalars("Box Loss", {"train": train_box_loss, "valid": val_box_loss}, epoch)
+        writer.add_scalars(
+            "Objectness Loss", {"train": train_obj_loss, "valid": val_obj_loss}, epoch
+        )
+        writer.add_scalars(
+            "RPN Loss", {"train": train_rpn_loss, "valid": val_rpn_loss}, epoch
+        )
+        writer.add_scalars(
+            "Classification Loss",
+            {"train": train_cls_loss, "valid": val_cls_loss},
+            epoch,
+        )
+        writer.add_scalars(
+            "Box Loss", {"train": train_box_loss, "valid": val_box_loss}, epoch
+        )
 
         # save the model
         if epoch % args.save_per_epoch == 0:
