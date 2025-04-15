@@ -32,6 +32,10 @@ pip install -r requirements.txt
 ### Step 2 : Dataset Preparation
 Place **nycu-hw2-data** folder at the same level as the **code** folder.
 
+project_root/ <br>
+├── code/ <br>
+├── nycu-hw2-data / <br>
+
 ## Usage
 ### Hyperparameters
 |Hyperparameter    | Value               |
@@ -54,8 +58,13 @@ cd HW2/code
 
 ### Train
 
-
+```
+python train.py --train_data_path <Path to train data> --train_json_path <Path to train JSON path> --val_data_path <Path to validation data> --val_json_path <Path to validation JSON path> --ckpt_path <Path to save checkpoint> --img_path <Path to save training curve image>                   
+```
 ### Test
 
+```
+python test.py --test_data_path <Path to test data> --ckpt_path <Path to checkpoint> --result_path <Path to save the prediction result>              
+```
 
 ## Performance snapshot
