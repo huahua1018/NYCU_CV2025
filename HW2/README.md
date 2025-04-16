@@ -69,3 +69,4 @@ python test.py --test_data_path <Path to test data> --ckpt_path <Path to checkpo
 ```
 
 ## Performance snapshot
+![Screenshot from 2025-04-16 16-30-16](https://github.com/user-attachments/assets/76c56b16-cf34-445e-98a5-19ba287b92f7)
