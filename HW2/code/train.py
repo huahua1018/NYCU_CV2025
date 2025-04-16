@@ -80,6 +80,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--img_path", type=str, default="../result/", help="Path to save the image."
     )
+    parser.add_argument(
+        "--device", type=str, default="cuda:0", help="Which device the training is on."
+    )
     parser.add_argument("--num_workers", type=int, default=4, help="Number of worker")
     parser.add_argument(
         "--num_classes", type=int, default=11, help="Number of classes."
@@ -114,7 +117,7 @@ if __name__ == "__main__":
         "--score_threshold",
         type=float,
         default=0.1,
-        help="Score threshold for prediction."
+        help="Score threshold for prediction.",
     )
 
     parser.add_argument(

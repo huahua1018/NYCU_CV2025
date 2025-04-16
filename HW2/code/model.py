@@ -2,6 +2,7 @@
 This script defines a custom Faster R-CNN model using a Swin Transformer backbone and 
 implements several utility functions for training, evaluation, and testing.
 """
+
 from typing import Tuple, List, Dict, Optional, Callable
 from collections import OrderedDict
 import json
@@ -155,224 +156,6 @@ def _swin_fpn_extractor(
     )
 
 
-class ModelFactory:
-    """
-    Responsible for returning the corresponding PyTorch model based on the name.
-    """
-
-    @staticmethod
-    def get_model(model_name, num_classes=11, pretrained=True):
-        """
-        Returns the model based on the name.
-        """
-        if model_name == "fasterrcnn_swin_t_fpn":
-            backbone = _swin_fpn_extractor(
-                trainable_layers=3, norm_layer=nn.BatchNorm2d
-            )
-
-            # RPN setting
-            anchor_sizes = (
-                (
-                    8,
-                    16,
-                    32,
-                    64,
-                    128,
-                    256,
-                    512,
-                ),
-            ) * 3
-            aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
-            anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
-
-            # ROI setting
-            box_roi_pool = MultiScaleRoIAlign(
-                featmap_names=["0", "1", "2", "3"], output_size=7, sampling_ratio=2
-            )
-            out_channels = backbone.out_channels
-            resolution = box_roi_pool.output_size[0]
-            representation_size = 1024
-            box_head = CustomTwoMLPHead(
-                in_channels=out_channels * resolution**2,
-                representation_size=representation_size,
-            )
-            box_predictor = DecoupledFasterRCNNPredictor(
-                in_channels=representation_size, num_classes=num_classes
-            )
-
-            model = FasterRCNN(
-                backbone,
-                # RPN
-                rpn_anchor_generator=anchor_generator,
-                # ROI
-                box_roi_pool=box_roi_pool,
-                box_head=box_head,
-                box_predictor=box_predictor,
-            )
-
-            model.roi_heads = GIoURoIHeads(
-                box_roi_pool=model.roi_heads.box_roi_pool,
-                box_head=model.roi_heads.box_head,
-                box_predictor=model.roi_heads.box_predictor,
-                fg_iou_thresh=0.5,
-                bg_iou_thresh=0.5,
-                batch_size_per_image=512,
-                positive_fraction=0.25,
-                bbox_reg_weights=None,
-                score_thresh=0.05,
-                nms_thresh=0.5,
-                detections_per_img=100,
-            )
-
-        elif model_name in ["fasterrcnn_resnet50_fpn", "fasterrcnn_resnet50_fpn_v2"]:
-            if model_name == "fasterrcnn_resnet50_fpn":
-                base_model = fasterrcnn_resnet50_fpn(
-                    weights="DEFAULT" if pretrained else None,
-                    weights_backbone="DEFAULT" if pretrained else None,
-                    trainable_backbone_layers=2,
-                )
-
-            elif model_name == "fasterrcnn_resnet50_fpn_v2":
-                base_model = fasterrcnn_resnet50_fpn_v2(
-                    weights="DEFAULT" if pretrained else None,
-                    weights_backbone="DEFAULT" if pretrained else None,
-                    trainable_backbone_layers=2,
-                )
-
-            model = FasterRCNN(
-                backbone=base_model.backbone,
-                num_classes=num_classes,
-                rpn_anchor_generator=base_model.rpn.anchor_generator,
-                box_roi_pool=base_model.roi_heads.box_roi_pool,
-            )
-
-            model.rpn = base_model.rpn
-            model.roi_heads = base_model.roi_heads
-            model.transform = base_model.transform
-
-            in_features = model.roi_heads.box_predictor.cls_score.in_features
-            model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-        else:
-            raise ValueError(f"Model {model_name} is not supported.")
-
-        return model
-
-
-def eval_forward(model, images, targets):
-    """
-    Performs a forward pass through the Faster R-CNN model for evaluation
-    and got both losses and predictions.
-
-    Reference:
-    https://stackoverflow.com/questions/71288513/how-can-i-determine-validation-loss-for-faster-rcnn-pytorch
-    """
-    model.eval()
-
-    original_image_sizes: List[Tuple[int, int]] = []
-    for img in images:
-        val = img.shape[-2:]
-        assert len(val) == 2
-        original_image_sizes.append((val[0], val[1]))
-
-    images, targets = model.transform(images, targets)
-
-    # Check for degenerate boxes
-    if targets is not None:
-        for target_idx, target in enumerate(targets):
-            boxes = target["boxes"]
-            degenerate_boxes = boxes[:, 2:] <= boxes[:, :2]
-            if degenerate_boxes.any():
-                # print the first degenerate box
-                bb_idx = torch.where(degenerate_boxes.any(dim=1))[0][0]
-                degen_bb: List[float] = boxes[bb_idx].tolist()
-                raise ValueError(
-                    "All bounding boxes should have positive height and width."
-                    f" Found invalid box {degen_bb} for target at index {target_idx}."
-                )
-
-    features = model.backbone(images.tensors)
-    if isinstance(features, torch.Tensor):
-        features = OrderedDict([("0", features)])
-
-    #####proposals, proposal_losses = model.rpn(images, features, targets)
-    features_rpn = list(features.values())
-    objectness, pred_bbox_deltas = model.rpn.head(features_rpn)
-    anchors = model.rpn.anchor_generator(images, features_rpn)
-
-    num_images = len(anchors)
-    num_anchors_per_level_shape_tensors = [o[0].shape for o in objectness]
-    num_anchors_per_level = [
-        s[0] * s[1] * s[2] for s in num_anchors_per_level_shape_tensors
-    ]
-    objectness, pred_bbox_deltas = concat_box_prediction_layers(
-        objectness, pred_bbox_deltas
-    )
-    # apply pred_bbox_deltas to anchors to obtain the decoded proposals
-    # note that we detach the deltas because Faster R-CNN do not backprop through
-    # the proposals
-    proposals = model.rpn.box_coder.decode(pred_bbox_deltas.detach(), anchors)
-    proposals = proposals.view(num_images, -1, 4)
-    proposals, scores = model.rpn.filter_proposals(
-        proposals, objectness, images.image_sizes, num_anchors_per_level
-    )
-
-    proposal_losses = {}
-    assert targets is not None
-    labels, matched_gt_boxes = model.rpn.assign_targets_to_anchors(anchors, targets)
-    regression_targets = model.rpn.box_coder.encode(matched_gt_boxes, anchors)
-    loss_objectness, loss_rpn_box_reg = model.rpn.compute_loss(
-        objectness, pred_bbox_deltas, labels, regression_targets
-    )
-    proposal_losses = {
-        "loss_objectness": loss_objectness,
-        "loss_rpn_box_reg": loss_rpn_box_reg,
-    }
-
-    #####detections, detector_losses = model.roi_heads(features, proposals, images.image_sizes, targets)
-    image_shapes = images.image_sizes
-
-    # --------------------- only training ---------
-    proposals_train, matched_idxs, labels, regression_targets = (
-        model.roi_heads.select_training_samples(proposals, targets)
-    )
-
-    box_features = model.roi_heads.box_roi_pool(features, proposals_train, image_shapes)
-    box_features = model.roi_heads.box_head(box_features)
-    class_logits, box_regression = model.roi_heads.box_predictor(box_features)
-
-    result: List[Dict[str, torch.Tensor]] = []
-    detector_losses = {}
-    loss_classifier, loss_box_reg = fastrcnn_loss(
-        class_logits, box_regression, labels, regression_targets
-    )
-    detector_losses = {"loss_classifier": loss_classifier, "loss_box_reg": loss_box_reg}
-    # -----------------------------------
-
-    box_features = model.roi_heads.box_roi_pool(features, proposals, image_shapes)
-    box_features = model.roi_heads.box_head(box_features)
-    class_logits, box_regression = model.roi_heads.box_predictor(box_features)
-    boxes, scores, labels = model.roi_heads.postprocess_detections(
-        class_logits, box_regression, proposals, image_shapes
-    )
-    num_images = len(boxes)
-    for i in range(num_images):
-        result.append(
-            {
-                "boxes": boxes[i],
-                "labels": labels[i],
-                "scores": scores[i],
-            }
-        )
-    detections = result
-    detections = model.transform.postprocess(detections, images.image_sizes, original_image_sizes)  # type: ignore[operator]
-    model.rpn.training = False
-    model.roi_heads.training = False
-    losses = {}
-    losses.update(detector_losses)
-    losses.update(proposal_losses)
-    return losses, detections
-
-
 class DecoupledFasterRCNNPredictor(nn.Module):
     """
     Custom predictor for Faster R-CNN
@@ -523,6 +306,7 @@ class GIoURoIHeads(RoIHeads):
     """
     Replaces the default RoIHeads with a custom one that uses GIoU loss for bounding box regression.
     """
+
     def fastrcnn_loss(class_logits, box_regression, labels, regression_targets):
         """
         Computes the loss for Faster R-CNN with GIoU for bbox regression.
@@ -550,10 +334,229 @@ class GIoURoIHeads(RoIHeads):
         return classification_loss, box_loss
 
 
+def eval_forward(model, images, targets):
+    """
+    Performs a forward pass through the Faster R-CNN model for evaluation
+    and got both losses and predictions.
+
+    Reference:
+    https://stackoverflow.com/questions/71288513/how-can-i-determine-validation-loss-for-faster-rcnn-pytorch
+    """
+    model.eval()
+
+    original_image_sizes: List[Tuple[int, int]] = []
+    for img in images:
+        val = img.shape[-2:]
+        assert len(val) == 2
+        original_image_sizes.append((val[0], val[1]))
+
+    images, targets = model.transform(images, targets)
+
+    # Check for degenerate boxes
+    if targets is not None:
+        for target_idx, target in enumerate(targets):
+            boxes = target["boxes"]
+            degenerate_boxes = boxes[:, 2:] <= boxes[:, :2]
+            if degenerate_boxes.any():
+                # print the first degenerate box
+                bb_idx = torch.where(degenerate_boxes.any(dim=1))[0][0]
+                degen_bb: List[float] = boxes[bb_idx].tolist()
+                raise ValueError(
+                    "All bounding boxes should have positive height and width."
+                    f" Found invalid box {degen_bb} for target at index {target_idx}."
+                )
+
+    features = model.backbone(images.tensors)
+    if isinstance(features, torch.Tensor):
+        features = OrderedDict([("0", features)])
+
+    #####proposals, proposal_losses = model.rpn(images, features, targets)
+    features_rpn = list(features.values())
+    objectness, pred_bbox_deltas = model.rpn.head(features_rpn)
+    anchors = model.rpn.anchor_generator(images, features_rpn)
+
+    num_images = len(anchors)
+    num_anchors_per_level_shape_tensors = [o[0].shape for o in objectness]
+    num_anchors_per_level = [
+        s[0] * s[1] * s[2] for s in num_anchors_per_level_shape_tensors
+    ]
+    objectness, pred_bbox_deltas = concat_box_prediction_layers(
+        objectness, pred_bbox_deltas
+    )
+    # apply pred_bbox_deltas to anchors to obtain the decoded proposals
+    # note that we detach the deltas because Faster R-CNN do not backprop through
+    # the proposals
+    proposals = model.rpn.box_coder.decode(pred_bbox_deltas.detach(), anchors)
+    proposals = proposals.view(num_images, -1, 4)
+    proposals, scores = model.rpn.filter_proposals(
+        proposals, objectness, images.image_sizes, num_anchors_per_level
+    )
+
+    proposal_losses = {}
+    assert targets is not None
+    labels, matched_gt_boxes = model.rpn.assign_targets_to_anchors(anchors, targets)
+    regression_targets = model.rpn.box_coder.encode(matched_gt_boxes, anchors)
+    loss_objectness, loss_rpn_box_reg = model.rpn.compute_loss(
+        objectness, pred_bbox_deltas, labels, regression_targets
+    )
+    proposal_losses = {
+        "loss_objectness": loss_objectness,
+        "loss_rpn_box_reg": loss_rpn_box_reg,
+    }
+
+    #####detections, detector_losses = model.roi_heads(features, proposals, images.image_sizes, targets)
+    image_shapes = images.image_sizes
+
+    # --------------------- only training ---------
+    proposals_train, matched_idxs, labels, regression_targets = (
+        model.roi_heads.select_training_samples(proposals, targets)
+    )
+
+    box_features = model.roi_heads.box_roi_pool(features, proposals_train, image_shapes)
+    box_features = model.roi_heads.box_head(box_features)
+    class_logits, box_regression = model.roi_heads.box_predictor(box_features)
+
+    result: List[Dict[str, torch.Tensor]] = []
+    detector_losses = {}
+    loss_classifier, loss_box_reg = fastrcnn_loss(
+        class_logits, box_regression, labels, regression_targets
+    )
+    detector_losses = {"loss_classifier": loss_classifier, "loss_box_reg": loss_box_reg}
+    # -----------------------------------
+
+    box_features = model.roi_heads.box_roi_pool(features, proposals, image_shapes)
+    box_features = model.roi_heads.box_head(box_features)
+    class_logits, box_regression = model.roi_heads.box_predictor(box_features)
+    boxes, scores, labels = model.roi_heads.postprocess_detections(
+        class_logits, box_regression, proposals, image_shapes
+    )
+    num_images = len(boxes)
+    for i in range(num_images):
+        result.append(
+            {
+                "boxes": boxes[i],
+                "labels": labels[i],
+                "scores": scores[i],
+            }
+        )
+    detections = result
+    detections = model.transform.postprocess(detections, images.image_sizes, original_image_sizes)  # type: ignore[operator]
+    model.rpn.training = False
+    model.roi_heads.training = False
+    losses = {}
+    losses.update(detector_losses)
+    losses.update(proposal_losses)
+    return losses, detections
+
+
+class ModelFactory:
+    """
+    Responsible for returning the corresponding PyTorch model based on the name.
+    """
+
+    @staticmethod
+    def get_model(model_name, num_classes=11, pretrained=True):
+        """
+        Returns the model based on the name.
+        """
+        if model_name == "fasterrcnn_swin_t_fpn":
+            backbone = _swin_fpn_extractor(
+                trainable_layers=3, norm_layer=nn.BatchNorm2d
+            )
+
+            # RPN setting
+            anchor_sizes = (
+                (
+                    8,
+                    16,
+                    32,
+                    64,
+                    128,
+                    256,
+                    512,
+                ),
+            ) * 3
+            aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+            anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
+
+            # ROI setting
+            box_roi_pool = MultiScaleRoIAlign(
+                featmap_names=["0", "1", "2", "3"], output_size=7, sampling_ratio=2
+            )
+            out_channels = backbone.out_channels
+            resolution = box_roi_pool.output_size[0]
+            representation_size = 1024
+            box_head = CustomTwoMLPHead(
+                in_channels=out_channels * resolution**2,
+                representation_size=representation_size,
+            )
+            box_predictor = DecoupledFasterRCNNPredictor(
+                in_channels=representation_size, num_classes=num_classes
+            )
+
+            model = FasterRCNN(
+                backbone,
+                # RPN
+                rpn_anchor_generator=anchor_generator,
+                # ROI
+                box_roi_pool=box_roi_pool,
+                box_head=box_head,
+                box_predictor=box_predictor,
+            )
+
+            model.roi_heads = GIoURoIHeads(
+                box_roi_pool=model.roi_heads.box_roi_pool,
+                box_head=model.roi_heads.box_head,
+                box_predictor=model.roi_heads.box_predictor,
+                fg_iou_thresh=0.5,
+                bg_iou_thresh=0.5,
+                batch_size_per_image=512,
+                positive_fraction=0.25,
+                bbox_reg_weights=None,
+                score_thresh=0.05,
+                nms_thresh=0.5,
+                detections_per_img=100,
+            )
+
+        elif model_name in ["fasterrcnn_resnet50_fpn", "fasterrcnn_resnet50_fpn_v2"]:
+            if model_name == "fasterrcnn_resnet50_fpn":
+                base_model = fasterrcnn_resnet50_fpn(
+                    weights="DEFAULT" if pretrained else None,
+                    weights_backbone="DEFAULT" if pretrained else None,
+                    trainable_backbone_layers=2,
+                )
+
+            elif model_name == "fasterrcnn_resnet50_fpn_v2":
+                base_model = fasterrcnn_resnet50_fpn_v2(
+                    weights="DEFAULT" if pretrained else None,
+                    weights_backbone="DEFAULT" if pretrained else None,
+                    trainable_backbone_layers=2,
+                )
+
+            model = FasterRCNN(
+                backbone=base_model.backbone,
+                num_classes=num_classes,
+                rpn_anchor_generator=base_model.rpn.anchor_generator,
+                box_roi_pool=base_model.roi_heads.box_roi_pool,
+            )
+
+            model.rpn = base_model.rpn
+            model.roi_heads = base_model.roi_heads
+            model.transform = base_model.transform
+
+            in_features = model.roi_heads.box_predictor.cls_score.in_features
+            model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+        else:
+            raise ValueError(f"Model {model_name} is not supported.")
+
+        return model
+
+
 class ModelTrainer:
     """
     This class is responsible for training, evaluating and testing the model.
     """
+
     def __init__(
         self,
         model_name,
@@ -568,103 +571,10 @@ class ModelTrainer:
         Initializes the model trainer with the specified model name and number of classes.
         """
         self.device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-
-        # ---------------------------- Pytorch ---------------------------------------#
-
-        # self.model = ModelFactory.get_model(model_name, num_classes)
-        # self.model.to(self.device)
-
-        # self.model = FasterRCNN(
-        #     backbone=base_model.backbone,
-        #     num_classes=num_classes,
-        #     rpn_anchor_generator=base_model.rpn.anchor_generator,
-        #     box_roi_pool=base_model.roi_heads.box_roi_pool,
-        # )
-
-        # # 設定 model 的 RPN、ROI 頭部
-        # self.model.rpn = base_model.rpn
-        # self.model.roi_heads = base_model.roi_heads
-        # self.model.transform = base_model.transform
-
-        # in_features = self.model.roi_heads.box_predictor.cls_score.in_features
-        # self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-        # self.model.to(self.device)
-        # ---------------------------- Pytorch ---------------------------------------#
-
-        # ---------------------------- Custom ---------------------------------------#
-        # Swin Transformer as backbone
-        backbone = _swin_fpn_extractor(trainable_layers=3, norm_layer=nn.BatchNorm2d)
-
-        # RPN setting
-        anchor_sizes = (
-            (
-                8,
-                16,
-                32,
-                64,
-                128,
-                256,
-                512,
-            ),
-        ) * 3
-
-        # anchor_sizes = ((8, 16, 32), (32, 64, 128), (128, 256, 512))
-        aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
-        anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
-
-        # ROI setting
-        box_roi_pool = MultiScaleRoIAlign(
-            featmap_names=["0", "1", "2", "3"], output_size=7, sampling_ratio=2
-        )
-
-        out_channels = backbone.out_channels
-        resolution = box_roi_pool.output_size[0]
-        representation_size = 1024
-        box_head = CustomTwoMLPHead(
-            in_channels=out_channels * resolution**2,
-            representation_size=representation_size,
-        )
-        box_predictor = DecoupledFasterRCNNPredictor(
-            in_channels=representation_size, num_classes=num_classes
-        )
-
-        # 設定 Faster R-CNN
-        self.model = FasterRCNN(
-            # backbone
-            backbone,
-            # num_classes=num_classes,  # 數字 0~9 + 背景
-            # min_size = args.resize[0],
-            # max_size = args.resize[1],
-            # RPN
-            rpn_anchor_generator=anchor_generator,
-            # rpn_pre_nms_top_n_train=1500,
-            # rpn_pre_nms_top_n_test=750,
-            # rpn_post_nms_top_n_train=1500,
-            # rpn_post_nms_top_n_test=750,
-            # ROI
-            box_roi_pool=box_roi_pool,
-            box_head=box_head,
-            box_predictor=box_predictor,
-        )
-        # 換掉 ROI heads
-        self.model.roi_heads = GIoURoIHeads(
-            box_roi_pool=self.model.roi_heads.box_roi_pool,
-            box_head=self.model.roi_heads.box_head,
-            box_predictor=self.model.roi_heads.box_predictor,
-            fg_iou_thresh=0.5,
-            bg_iou_thresh=0.5,
-            batch_size_per_image=512,
-            positive_fraction=0.25,
-            bbox_reg_weights=None,
-            score_thresh=0.05,
-            nms_thresh=0.5,
-            detections_per_img=100,
-        )
+        self.model = ModelFactory.get_model(model_name, num_classes)
         self.model.to(self.device)
-        # ---------------------------- Custom ---------------------------------------#
 
         self.args = args
-
         self.lr = lr
         self.min_lr = min_lr
         self.weight_decay = weight_decay

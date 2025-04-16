@@ -58,7 +58,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        default="../checkpoints/model_SwinTransformer_Combined_Decouple_weight_bs_8_epochs_18/mAP_best.pt",
+        default="../checkpoints/model_SwinTransformer_Combined_trueDecouple_weight_bs_8_epochs_18/mAP_best.pt",
         help="Path to checkpoint file.",
     )
     parser.add_argument(
@@ -67,25 +67,23 @@ if __name__ == "__main__":
         default="../result/",
         help="Path to save the prediction result.",
     )
+    parser.add_argument(
+        "--device", type=str, default="cuda:0", help="Which device the training is on."
+    )
     parser.add_argument("--num_workers", type=int, default=4, help="Number of worker")
     parser.add_argument("--bs", type=int, default=1, help="Batch size for training.")
+
     parser.add_argument(
         "--model_name",
         type=str,
-        default="fasterrcnn_resnet50_fpn_v2",
-        help="Model name to use for testing.",
+        default="fasterrcnn_swin_t_fpn",
+        help="Model name.",
+        choices=[
+            "fasterrcnn_resnet50_fpn",
+            "fasterrcnn_resnet50_fpn_v2",
+            "fasterrcnn_swin_t_fpn",
+        ],
     )
-    # parser.add_argument(
-    #     "--model_name",
-    #     type=str,
-    #     default="fasterrcnn_swin_t_fpn",
-    #     help="Model name.",
-    #     choices=[
-    #         "fasterrcnn_resnet50_fpn",
-    #         "fasterrcnn_resnet50_fpn_v2",
-    #         "fasterrcnn_swin_t_fpn",
-    #     ],
-    # )
     parser.add_argument(
         "--resize",
         type=tuple,
