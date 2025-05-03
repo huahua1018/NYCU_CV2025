@@ -85,4 +85,5 @@ python test.py --test_data_path <Path to test data> --test_json_path <Path to te
 ```
 
 ## Performance snapshot
-![Screenshot from 2025-04-16 16-30-16](https://github.com/user-attachments/assets/76c56b16-cf34-445e-98a5-19ba287b92f7)
+![image](https://github.com/user-attachments/assets/a01a703a-178f-4e3a-b990-85f9429cf8d4)
+
