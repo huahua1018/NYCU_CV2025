@@ -540,12 +540,7 @@ class ModelFactory:
 
             # RPN setting
             anchor_sizes = (
-                (
-                    4,
-                    8,
-                    16,
-                    32,
-                ),
+                (4, 8, 16, 32),
                 (16, 32, 64, 128),
                 (64, 128, 256, 512),
             )
