@@ -1,23 +1,26 @@
+"""
+Split the dataset into train/val sets and convert the masks to COCO format.
+"""
+
 import os
 import json
-import random
-import cv2
-import skimage.io as sio
-from scipy.ndimage import label
-import numpy as np
 from pathlib import Path
-
-
-from sklearn.model_selection import train_test_split
-from utils import encode_mask, decode_maskobj
 from pycocotools.mask import area
+
+import skimage.io as sio
+import numpy as np
+from sklearn.model_selection import train_test_split
+
+from utils import encode_mask
 
 # directory path
 dir_root = "../hw3-data-release/"
 data_root = Path(os.path.join(dir_root, "train"))
 sample_dirs = [p for p in data_root.iterdir() if p.is_dir()]
 
-split_dirs = [d for d in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, d))]
+split_dirs = [
+    d for d in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, d))
+]
 # 80% train / 20% valid
 train_ids, val_ids = train_test_split(split_dirs, test_size=0.2, random_state=42)
 
@@ -54,7 +57,7 @@ for sample_dir in sample_dirs:
 
     # Only get dir name
     filename = sample_dir.name
-    
+
     if filename in train_ids:
         print(f"Processing {filename} for training...")
         train_idx += 1
@@ -74,10 +77,10 @@ for sample_dir in sample_dirs:
                 "id": val_idx,
                 "file_name": filename,
             }
-        ) 
+        )
 
     for class_id in range(1, 5):  # class1 ~ class4
-        mask_path = sample_dir / f'class{class_id}.tif'
+        mask_path = sample_dir / f"class{class_id}.tif"
         if mask_path.exists():
             mask = sio.imread(str(mask_path))
 
@@ -88,7 +91,7 @@ for sample_dir in sample_dirs:
 
                 # Filter out empty masks
                 if pos[0].size == 0 or pos[1].size == 0:
-                    continue 
+                    continue
 
                 # Get the bounding box coordinates
                 x_min = np.min(pos[1]).tolist()
@@ -96,9 +99,10 @@ for sample_dir in sample_dirs:
                 x_max = np.max(pos[1]).tolist()
                 y_max = np.max(pos[0]).tolist()
 
+                # Skip empty bounding boxes
                 if x_max <= x_min or y_max <= y_min:
-                    continue  # 跳過無效框
-                
+                    continue
+
                 width = x_max - x_min
                 height = y_max - y_min
 
@@ -152,4 +156,3 @@ with open(train_json_path, "w", encoding="utf-8") as f:
 
 with open(val_json_path, "w", encoding="utf-8") as f:
     json.dump(val_content, f, indent=4)
-

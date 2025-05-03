@@ -6,8 +6,6 @@ and record performance.
 """
 
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
 import argparse
 import random
 
@@ -79,9 +77,7 @@ if __name__ == "__main__":
         "--device", type=str, default="cuda:0", help="Which device the training is on."
     )
     parser.add_argument("--num_workers", type=int, default=4, help="Number of worker")
-    parser.add_argument(
-        "--num_classes", type=int, default=5, help="Number of classes."
-    )
+    parser.add_argument("--num_classes", type=int, default=5, help="Number of classes.")
 
     parser.add_argument(
         "--model_name",
@@ -108,12 +104,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--factor", type=float, default=0.1, help="Factor for ReduceLROnPlateau."
     )
-    parser.add_argument(
-        "--score_threshold",
-        type=float,
-        default=0.1,
-        help="Score threshold for prediction.",
-    )
 
     parser.add_argument(
         "--save_per_epoch", type=int, default=3, help="Save CKPT per ** epochs"
@@ -130,7 +120,7 @@ if __name__ == "__main__":
     setup_seed(118)
 
     # create log directory for tensorboard
-    parm_dir = f"model_{args.model_name}3_bs_{args.bs}_epochs_{args.epochs}"
+    parm_dir = f"model_{args.model_name}4_bs_{args.bs}_epochs_{args.epochs}"
     log_dir = os.path.join("runs", parm_dir)
 
     # create folder if not exists
@@ -232,65 +222,71 @@ if __name__ == "__main__":
             train_lr,
         ) = myModel.train_one_epoch(train_loader, epoch)
 
-       
-        mAP = myModel.eval_one_epoch(
-            val_loader, epoch, json_path, writer
-        )
+        (
+            val_loss,
+            val_obj_loss,
+            val_rpn_loss,
+            val_cls_loss,
+            val_box_loss,
+            val_mask_loss,
+            mAP,
+        ) = myModel.eval_one_epoch(val_loader, epoch, json_path, writer)
 
         # record the loss and accuracy
         train_loss_proc.append(train_loss)
-        # val_loss_proc.append(val_loss)
+        val_loss_proc.append(val_loss)
         val_mAP_proc.append(mAP)
 
         # write to tensorboard
         writer.add_scalar("Loss/train", train_loss, epoch)
-        # writer.add_scalar("Loss/valid", val_loss, epoch)
+        writer.add_scalar("Loss/valid", val_loss, epoch)
         writer.add_scalar("Objectness Loss/train", train_obj_loss, epoch)
-        # writer.add_scalar("Objectness Loss/valid", val_obj_loss, epoch)
+        writer.add_scalar("Objectness Loss/valid", val_obj_loss, epoch)
         writer.add_scalar("RPN Loss/train", train_rpn_loss, epoch)
-        # writer.add_scalar("RPN Loss/valid", val_rpn_loss, epoch)
+        writer.add_scalar("RPN Loss/valid", val_rpn_loss, epoch)
         writer.add_scalar("Classification Loss/train", train_cls_loss, epoch)
-        # writer.add_scalar("Classification Loss/valid", val_cls_loss, epoch)
+        writer.add_scalar("Classification Loss/valid", val_cls_loss, epoch)
         writer.add_scalar("Box Loss/train", train_box_loss, epoch)
-        # writer.add_scalar("Box Loss/valid", val_box_loss, epoch)
+        writer.add_scalar("Box Loss/valid", val_box_loss, epoch)
         writer.add_scalar("Mask Loss/train", train_mask_loss, epoch)
-        # writer.add_scalar("Mask Loss/valid", val_mask_loss, epoch)
+        writer.add_scalar("Mask Loss/valid", val_mask_loss, epoch)
         writer.add_scalar("mAP/valid", mAP, epoch)
         writer.add_scalar("Learning Rate", train_lr, epoch)
 
-        # writer.add_scalars("Loss", {"train": train_loss, "valid": val_loss}, epoch)
-        # writer.add_scalars(
-        #     "Objectness Loss", {"train": train_obj_loss, "valid": val_obj_loss}, epoch
-        # )
-        # writer.add_scalars(
-        #     "RPN Loss", {"train": train_rpn_loss, "valid": val_rpn_loss}, epoch
-        # )
-        # writer.add_scalars(
-        #     "Classification Loss",
-        #     {"train": train_cls_loss, "valid": val_cls_loss},
-        #     epoch,
-        # )
-        # writer.add_scalars(
-        #     "Box Loss", {"train": train_box_loss, "valid": val_box_loss}, epoch
-        # )
+        writer.add_scalars("Loss", {"train": train_loss, "valid": val_loss}, epoch)
+        writer.add_scalars(
+            "Objectness Loss", {"train": train_obj_loss, "valid": val_obj_loss}, epoch
+        )
+        writer.add_scalars(
+            "RPN Loss", {"train": train_rpn_loss, "valid": val_rpn_loss}, epoch
+        )
+        writer.add_scalars(
+            "Classification Loss",
+            {"train": train_cls_loss, "valid": val_cls_loss},
+            epoch,
+        )
+        writer.add_scalars(
+            "Box Loss", {"train": train_box_loss, "valid": val_box_loss}, epoch
+        )
+        writer.add_scalars(
+            "Mask Loss", {"train": train_mask_loss, "valid": val_mask_loss}, epoch
+        )
 
         # save the model
-        if epoch>10 and epoch % args.save_per_epoch == 0:
+        if epoch > 10 and epoch % args.save_per_epoch == 0:
             torch.save(myModel.model.state_dict(), f"{args.ckpt_path}/epoch_{epoch}.pt")
         if mAP > highest_mAP:
             torch.save(myModel.model.state_dict(), f"{args.ckpt_path}/mAP_best.pt")
             highest_mAP = mAP
-        # if val_loss < lowest_loss:
-        #     torch.save(myModel.model.state_dict(), f"{args.ckpt_path}/val_loss_best.pt")
-        #     lowest_loss = val_loss
+        if val_loss < lowest_loss:
+            torch.save(myModel.model.state_dict(), f"{args.ckpt_path}/val_loss_best.pt")
+            lowest_loss = val_loss
 
-        # print(
-        #     f"epoch {epoch}: train loss: {train_loss}, valid loss: {val_loss}, valid mAP: {mAP}"
-        # )
         print(
-            f"epoch {epoch}: train loss: {train_loss}, valid mAP: {mAP}, "
+            f"epoch {epoch}: train loss: {train_loss}, valid loss: {val_loss}, valid mAP: {mAP}"
         )
-        torch.cuda.empty_cache()
+
+        # torch.cuda.empty_cache()
 
     torch.save(myModel.model.state_dict(), f"{args.ckpt_path}/epoch_{args.epochs}.pt")
 
@@ -304,15 +300,15 @@ if __name__ == "__main__":
         folder_path=args.img_path,
         if_label=False,
     )
-    # utils.show_process(
-    #     data=np.array([val_loss_proc]),
-    #     xname="Epochs",
-    #     yname="Loss",
-    #     labels=np.array(["Loss"]),
-    #     file_name="Validation",
-    #     folder_path=args.img_path,
-    #     if_label=False,
-    # )
+    utils.show_process(
+        data=np.array([val_loss_proc]),
+        xname="Epochs",
+        yname="Loss",
+        labels=np.array(["Loss"]),
+        file_name="Validation",
+        folder_path=args.img_path,
+        if_label=False,
+    )
     utils.show_process(
         data=np.array([val_mAP_proc]),
         xname="Epochs",
@@ -322,15 +318,15 @@ if __name__ == "__main__":
         folder_path=args.img_path,
         if_label=False,
     )
-    # utils.show_process(
-    #     data=np.array([train_loss_proc, val_loss_proc]),
-    #     xname="Epochs",
-    #     yname="Loss",
-    #     labels=np.array(["Train", "Valid"]),
-    #     file_name="Training_Validation",
-    #     folder_path=args.img_path,
-    #     if_label=True,
-    # )
+    utils.show_process(
+        data=np.array([train_loss_proc, val_loss_proc]),
+        xname="Epochs",
+        yname="Loss",
+        labels=np.array(["Train", "Valid"]),
+        file_name="Training_Validation",
+        folder_path=args.img_path,
+        if_label=True,
+    )
 
     # close tensorboard
     writer.close()

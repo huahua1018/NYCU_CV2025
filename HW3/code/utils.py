@@ -1,5 +1,6 @@
-
-import cv2
+"""
+This module contains custom dataset classes and utility functions.
+"""
 import os
 import json
 
@@ -10,12 +11,6 @@ from torch.utils.data import Dataset
 from PIL import Image
 import skimage.io as sio
 from pycocotools import mask as mask_utils
-from pathlib import Path
-# from skimage.measure import label
-from torchvision.ops import masks_to_boxes
-from scipy.ndimage import label
-
-
 
 def decode_maskobj(mask_obj):
     return mask_utils.decode(mask_obj)
@@ -31,101 +26,6 @@ def encode_mask(binary_mask):
 def read_maskfile(filepath):
     mask_array = sio.imread(filepath)
     return mask_array
-
-
-# class TrainDataset(Dataset):
-#     """
-#     A custom dataset class for loading training and validation images with labels.
-#     """
-
-#     def __init__(self, img_dir, json_path, transform=None):
-#         """
-#         Initialize the dataset.
-
-#         :param img_dir: Directory containing the images.
-#         :param transform: Transformations to be applied to the images.
-#         """
-        
-#         self.img_dir = Path(img_dir)
-#         self.json_path = json_path
-
-#         # with open(json_path, "r") as f:
-#         #     self.filename = json.load(f)
-#         # self.sample_dirs = [p for p in self.img_dir.iterdir() if p.is_dir() and p.name in self.filename]
-        
-#         self.sample_dirs = [p for p in self.img_dir.iterdir() if p.is_dir()]
-#         self.transform = transform
-    
-
-#     def __len__(self):
-#         """
-#         Return the total number of images in the dataset.
-#         """
-#         return len(self.sample_dirs)
-
-#     def __getitem__(self, idx):
-#         """
-#         Get the image and its mask at the given index.
-
-#         :param idx: Index of the image to retrieve.
-
-#         """
-#         sample_dir = Path(self.sample_dirs[idx])
-        
-#         # Read the image
-#         image_path = sample_dir / "image.tif"
-#         image = cv2.imread(str(image_path))
-
-#         masks = []
-#         labels = []
-#         boxes = []
-#         for class_id in range(1, 5):  # class1 ~ class4
-#             mask_path = sample_dir / f'class{class_id}.tif'
-#             if mask_path.exists():
-#                 mask = sio.imread(str(mask_path))  # (H, W), binary mask
-
-#                 num_instance = np.max(mask).astype(np.int32)
-#                 for inst_id in range(1, num_instance + 1):
-#                     instance_mask = (mask == inst_id).astype(np.uint8)
-#                     pos = np.where(instance_mask > 0)
-
-#                     # Filter out empty masks
-#                     if pos[0].size == 0 or pos[1].size == 0:
-#                         continue 
-#                     # Get the bounding box coordinates
-#                     x_min = np.min(pos[1])
-#                     y_min = np.min(pos[0])
-#                     x_max = np.max(pos[1])
-#                     y_max = np.max(pos[0])
-
-#                     if x_max <= x_min or y_max <= y_min:
-#                         continue  # 跳過無效框
-
-#                     boxes.append([x_min, y_min, x_max, y_max])
-#                     masks.append(instance_mask)
-#                     labels.append(class_id)
-                
-
-#         if len(masks) == 0:
-#             masks = torch.zeros((0, image.shape[1], image.shape[2]), dtype=torch.uint8)
-#             boxes = torch.zeros((0, 4), dtype=torch.float32)
-#             labels = torch.zeros((0,), dtype=torch.int64)
-#         else:
-#             masks = np.array(masks)  # faster conversion
-#             masks = torch.as_tensor(masks, dtype=torch.uint8)
-#             boxes = torch.as_tensor(boxes, dtype=torch.float32)
-#             labels = torch.as_tensor(labels, dtype=torch.int64)
-
-#         target = {
-#             "boxes": boxes,
-#             "labels": labels,
-#             "masks": masks,
-#         }
-
-#         if self.transform:
-#             image = self.transform(image)
-
-#         return image, target
 
 class TrainDataset(Dataset):
     def __init__(self, img_dir, json_path, transform=None):
@@ -346,78 +246,3 @@ def show_process(
     file_path = os.path.join(folder_path, f"{yname}_{file_name}.png")
     plt.savefig(file_path)
     print(f"Save the figure to {file_path}")
-
-
-# def visualize_predictions(image, id, targets, pred_list, writer, epoch):
-#     """ "
-#     Visualizes the predictions on the image and logs it to TensorBoard in validation.
-
-#     Args:
-#         image (torch.Tensor): The input image tensor of shape [C, H, W].
-#         id (int): The image ID.
-#         targets (dict): The ground truth targets containing bounding boxes and labels.
-#         pred_list (list): List of predicted bounding boxes and labels.
-#         writer (SummaryWriter): TensorBoard writer for logging the image.
-#         epoch (int): Current epoch number.
-#     """
-#     # 1. Convert image tensor from [C, H, W] to [H, W, C] and to numpy array for OpenCV
-#     img_with_boxes = image.permute(1, 2, 0).cpu().numpy()
-#     img_with_boxes = np.ascontiguousarray(img_with_boxes)
-
-#     # 2. Draw predicted bounding boxes (from pred_list)
-#     for pred in pred_list:
-#         xmin, ymin, xmax, ymax = pred["bbox"]
-
-#         # Draw predicted box in blue
-#         cv2.rectangle(
-#             img_with_boxes,
-#             (int(xmin), int(ymin)),
-#             (int(xmax), int(ymax)),
-#             (255, 0, 0),  # Blue
-#             1,
-#         )
-
-#         # Put predicted class id and score above the box
-#         cv2.putText(
-#             img_with_boxes,
-#             f"{pred['category_id']}:{pred['score']:.2f}",
-#             (int(xmin), int(ymin) - 2),
-#             cv2.FONT_HERSHEY_SIMPLEX,
-#             0.3,
-#             (255, 255, 255),  # White text
-#             1,
-#         )
-
-#     # 3. Draw ground truth bounding boxes from targets
-#     gt_boxes = targets["boxes"]
-#     gt_labels = targets["labels"]
-
-#     for box, label in zip(gt_boxes, gt_labels):
-#         xmin, ymin, xmax, ymax = box
-
-#         # Draw ground truth box in green
-#         cv2.rectangle(
-#             img_with_boxes,
-#             (int(xmin), int(ymin)),
-#             (int(xmax), int(ymax)),
-#             (0, 255, 0),  # Green
-#             1,
-#         )
-
-#         # Put ground truth label above the box (label starts from 1)
-#         cv2.putText(
-#             img_with_boxes,
-#             f"{label.item()-1}",
-#             (int(xmin), int(ymin) - 2),
-#             cv2.FONT_HERSHEY_SIMPLEX,
-#             0.3,
-#             (0, 255, 0),  # Green text
-#             1,
-#         )
-
-#     # 4. Convert image back to tensor format [C, H, W] for TensorBoard logging
-#     img_with_boxes_tensor = torch.from_numpy(img_with_boxes).permute(2, 0, 1).float()
-
-#     # 5. Log the image to TensorBoard
-#     if writer is not None:
-#         writer.add_image(f"val{id}_pred", img_with_boxes_tensor, epoch)

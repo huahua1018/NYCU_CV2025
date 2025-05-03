@@ -1,5 +1,5 @@
 """
-This script defines a custom Faster R-CNN model using a Swin Transformer backbone and 
+This script defines a custom Mask R-CNN model using a Swin Transformer backbone and 
 implements several utility functions for training, evaluation, and testing.
 """
 
@@ -8,30 +8,132 @@ from collections import OrderedDict
 import json
 
 from tqdm import tqdm
-import pandas as pd
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
 
-from torchvision.models.detection import fasterrcnn_resnet50_fpn, fasterrcnn_resnet50_fpn_v2, FasterRCNN
 from torchvision.models.detection.mask_rcnn import maskrcnn_resnet50_fpn, maskrcnn_resnet50_fpn_v2, MaskRCNN, MaskRCNNPredictor
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor, FastRCNNConvFCHead
 from torchvision.models import swin_t
-from torchvision.models.detection.roi_heads import fastrcnn_loss
-from torchvision.models.detection.rpn import concat_box_prediction_layers
-from torchvision.models.detection.rpn import AnchorGenerator
+from torchvision.models.detection.rpn import concat_box_prediction_layers, AnchorGenerator
 from torchvision.ops import FeaturePyramidNetwork
+from torchvision.ops import misc as misc_nn_ops
 from torchvision.ops.poolers import MultiScaleRoIAlign
 from torchvision.ops.giou_loss import generalized_box_iou_loss
 from torchvision.ops.feature_pyramid_network import LastLevelMaxPool, ExtraFPNBlock
 from torchvision.models._utils import IntermediateLayerGetter
-from torchvision.models.detection.roi_heads import RoIHeads
+from torchvision.models.detection.roi_heads import RoIHeads, project_masks_on_boxes, fastrcnn_loss, maskrcnn_loss, maskrcnn_inference
 from pycocotools.cocoeval import COCOeval
 from pycocotools.coco import COCO
 from torchvision.models.resnet import ResNet50_Weights
 
-# from utils import visualize_predictions
 from utils import encode_mask
+
+
+class ChannelAttention(nn.Module):
+    """
+    Channel Attention Module (CA) enhances important feature channels using
+    both average-pooling and max-pooling, followed by a shared MLP.
+    ref: https://zhuanlan.zhihu.com/p/99261200
+
+    Args:
+        in_planes (int): Number of input channels.
+        ratio (int): Reduction ratio for the MLP. Default is 16.
+
+    Forward Pass:
+        x (Tensor): Input feature map of shape (B, C, H, W).
+
+    Returns:
+        Tensor: Attention-weighted feature map of the same shape as input.
+    """
+
+    def __init__(self, in_planes, ratio=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+
+        self.fc1 = nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False)
+        self.relu1 = nn.ReLU()
+        self.fc2 = nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False)
+
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        """
+        Forward pass of the Channel Attention Module.
+        """
+        avg_out = self.fc2(self.relu1(self.fc1(self.avg_pool(x))))
+        max_out = self.fc2(self.relu1(self.fc1(self.max_pool(avg_out))))
+        out = avg_out + max_out
+        return self.sigmoid(out)
+
+
+class SpatialAttention(nn.Module):
+    """
+    Spatial Attention Module (SA) enhances important spatial regions
+    by computing attention using max-pooling and average-pooling along
+    the channel axis.
+    ref: https://zhuanlan.zhihu.com/p/99261200
+
+    Args:
+        kernel_size (int): Kernel size for the convolutional layer. Default is 7.
+
+    Forward Pass:
+        x (Tensor): Input feature map of shape (B, C, H, W).
+
+    Returns:
+        Tensor: Spatial attention map of shape (B, 1, H, W).
+    """
+
+    def __init__(self, kernel_size=7):
+        super().__init__()
+
+        assert kernel_size in (3, 7), "kernel size must be 3 or 7"
+        padding = 3 if kernel_size == 7 else 1
+
+        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        """
+        Forward pass of the Spatial Attention Module.
+        """
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x = torch.cat([avg_out, max_out], dim=1)
+        x = self.conv1(x)
+        return self.sigmoid(x)
+
+
+class CBAM(nn.Module):
+    """
+    Convolutional Block Attention Module (CBAM) applies both channel and spatial attention
+    sequentially to refine feature representations.
+
+    Args:
+        in_planes (int): Number of input channels.
+        ratio (int): Reduction ratio for channel attention. Default is 16.
+        kernel_size (int): Kernel size for spatial attention. Default is 7.
+
+    Forward Pass:
+        x (Tensor): Input feature map of shape (B, C, H, W).
+
+    Returns:
+        Tensor: Attention-refined feature map of shape (B, C, H, W).
+    """
+
+    def __init__(self, in_planes, ratio=16, kernel_size=7):
+        super().__init__()
+        self.ca = ChannelAttention(in_planes, ratio)
+        self.sa = SpatialAttention(kernel_size)
+
+    def forward(self, x):
+        """
+        Forward pass of the Convolutional Block Attention Module.
+        """
+        x = x * self.ca(x)
+        x = x * self.sa(x)
+        return x
 
 
 class SwinBackboneWithFPN(nn.Module):
@@ -76,6 +178,8 @@ class SwinBackboneWithFPN(nn.Module):
         )
         self.out_channels = out_channels
 
+        self.cbam = CBAM(in_planes=out_channels)
+
     def forward(self, x: Tensor) -> Dict[str, Tensor]:
         """
         Performs the forward pass through the Swin backbone and FPN.
@@ -86,6 +190,11 @@ class SwinBackboneWithFPN(nn.Module):
         x = {k: v.permute(0, 3, 1, 2) for k, v in x.items()}
 
         x = self.fpn(x)
+
+        for k, v in x.items():
+            # Apply CBAM attention
+            x[k] = self.cbam(v)
+
         return x
 
 
@@ -159,156 +268,81 @@ def _swin_fpn_extractor(
     )
 
 
-class DecoupledFasterRCNNPredictor(nn.Module):
+class CustomMaskRCNNHeads(nn.Sequential):
     """
-    Custom predictor for Faster R-CNN
-    Use different feature for classification and bounding box regression.
-    Output:
-        class scores and bounding box predictions
+    A custom Mask R-CNN head that stacks a series of convolutional layers
+    followed by CBAM (Convolutional Block Attention Module) and dropout for regularization.
     """
 
-    def __init__(self, in_channels, num_classes):
-        """
-        Args:
-           in_channels (int): Number of input features.
-           num_classes (int): Number of output classes (including background).
-        """
-        super().__init__()
-
-        # Classification layer: outputs class scores
-        self.cls_score = nn.Sequential(
-            nn.Linear(in_channels, in_channels),
-            nn.ReLU(),
-            nn.Linear(in_channels, num_classes),
-        )
-
-        # Bounding box regression layer: outputs box coordinates
-        self.bbox_pred = nn.Sequential(
-            nn.Linear(in_channels, in_channels),
-            nn.ReLU(),
-            nn.Linear(in_channels, num_classes * 4),
-        )
-
-    def forward(self, x):
-        """
-        Args:
-            x (Tensor): Input feature tensor
-
-        Returns:
-            scores (Tensor): Class scores, shape (N, num_classes)
-            bbox_deltas (Tensor): Bounding box predictions, shape (N, num_classes * 4)
-        """
-        if x.dim() == 4:
-            torch._assert(
-                list(x.shape[2:]) == [1, 1],
-                f"x has the wrong shape, expecting the last two dimensions to be [1,1] instead of {list(x.shape[2:])}",
+    def __init__(self, in_channels, layers, dilation, norm_layer=None):
+        blocks = []
+        next_feature = in_channels
+        for layer_features in layers:
+            blocks.append(
+                misc_nn_ops.Conv2dNormActivation(
+                    next_feature,
+                    layer_features,
+                    kernel_size=3,
+                    stride=1,
+                    padding=dilation,
+                    dilation=dilation,
+                    norm_layer=norm_layer,
+                )
             )
-        # Flatten input to (N, C)
-        x = x.flatten(start_dim=1)
-
-        scores = self.cls_score(x)
-        bbox_deltas = self.bbox_pred(x)
-
-        return scores, bbox_deltas
+            blocks.append(CBAM(layer_features))
+            blocks.append(nn.Dropout2d(0.1))
+        super().__init__(*blocks)
 
 
-class CustomFasterRCNNPredictor(nn.Module):
+class CustomRoIHeads(RoIHeads):
     """
-    Custom predictor for Faster R-CNN
-    Use same feature for classification and bounding box regression.
-
-    Output:
-        class scores and bounding box predictions
+    Replaces the default RoIHeads with a custom one that uses original mask loss + dice loss for mask prediction.
     """
 
-    def __init__(self, in_channels, num_classes):
+    def dice_loss(input, target, eps=1e-6):
         """
-        Args:
-            in_channels (int): Number of input features.
-            num_classes (int): Number of output classes (including background).
+        Computes the Dice loss between the predicted and target masks.
         """
-        super().__init__()
+        input = torch.sigmoid(input)
+        input = input.view(input.size(0), -1)
+        target = target.view(target.size(0), -1)
+        intersection = (input * target).sum(dim=1)
+        union = input.sum(dim=1) + target.sum(dim=1)
+        dice = (2 * intersection + eps) / (union + eps)
+        return 1 - dice.mean()
 
-        # Add a simple fully connected layer with ReLU and dropout
-        self.linear = nn.Sequential(
-            nn.Linear(in_channels, in_channels),
-            nn.ReLU(),
-            nn.Dropout(0.3),
+    def maskrcnn_loss(
+        self, mask_logits, proposals, gt_masks, gt_labels, mask_matched_idxs
+    ):
+        """
+        Replaces the default maskrcnn_loss with a custom one that uses original mask loss + dice loss for mask prediction.
+        """
+        discretization_size = mask_logits.shape[-1]
+        labels = [
+            gt_label[idxs] for gt_label, idxs in zip(gt_labels, mask_matched_idxs)
+        ]
+        mask_targets = [
+            project_masks_on_boxes(m, p, i, discretization_size)
+            for m, p, i in zip(gt_masks, proposals, mask_matched_idxs)
+        ]
+
+        labels = torch.cat(labels, dim=0)
+        mask_targets = torch.cat(mask_targets, dim=0)
+
+        if mask_targets.numel() == 0:
+            return mask_logits.sum() * 0
+
+        org_loss = F.binary_cross_entropy_with_logits(
+            mask_logits[torch.arange(labels.shape[0], device=labels.device), labels],
+            mask_targets,
         )
+        # Make one-hot target for dice
+        one_hot_targets = F.one_hot(labels, num_classes=5)  # [N, H, W, C]
+        one_hot_targets = one_hot_targets.permute(0, 3, 1, 2).float()  # [N, C, H, W]
 
-        # Classification layer: outputs class scores
-        self.cls_score = nn.Linear(in_channels, num_classes)
+        dice = self.dice_loss(mask_logits, one_hot_targets)
 
-        # Bounding box regression layer: outputs box coordinates
-        self.bbox_pred = nn.Linear(in_channels, num_classes * 4)
-
-    def forward(self, x):
-        """
-        Args:
-            x (Tensor): Input feature tensor
-
-        Returns:
-            scores (Tensor): Class scores, shape (N, num_classes)
-            bbox_deltas (Tensor): Bounding box predictions, shape (N, num_classes * 4)
-        """
-        if x.dim() == 4:
-            torch._assert(
-                list(x.shape[2:]) == [1, 1],
-                f"x has the wrong shape, expecting [1,1] but got {list(x.shape[2:])}",
-            )
-
-        # Flatten input to (N, C)
-        x = x.flatten(start_dim=1)
-
-        # Pass through linear layers
-        x = self.linear(x)
-
-        scores = self.cls_score(x)
-        bbox_deltas = self.bbox_pred(x)
-
-        return scores, bbox_deltas
-
-
-class CustomTwoMLPHead(nn.Module):
-    """
-    A custom two-layer MLP head used for object detection.
-    Adds BatchNorm and Dropout for improved generalization.
-
-    Args:
-        in_channels (int): Number of input channels.
-        representation_size (int): Output feature size for both MLP layers.
-    """
-
-    def __init__(self, in_channels, representation_size):
-        """
-        Initializes the MLP head.
-        """
-        super().__init__()
-        self.fc6 = nn.Linear(in_channels, representation_size)
-        self.bn1 = nn.BatchNorm1d(representation_size)
-        # Dropout to prevent overfitting
-        self.dropout = nn.Dropout(p=0.3)
-        self.fc7 = nn.Linear(representation_size, representation_size)
-        self.bn2 = nn.BatchNorm1d(representation_size)
-
-    def forward(self, x):
-        """
-        Forward pass through the MLP head.
-        """
-        # Flatten input tensor
-        x = x.flatten(start_dim=1)
-        # FC -> BN -> ReLU -> Dropout
-        x = F.relu(self.bn1(self.fc6(x)))
-        x = self.dropout(x)
-        # FC -> BN -> ReLU
-        x = F.relu(self.bn2(self.fc7(x)))
-        return x
-
-
-class GIoURoIHeads(RoIHeads):
-    """
-    Replaces the default RoIHeads with a custom one that uses GIoU loss for bounding box regression.
-    """
+        return org_loss + dice
 
     def fastrcnn_loss(class_logits, box_regression, labels, regression_targets):
         """
@@ -454,25 +488,31 @@ def eval_forward(model, images, targets):
         mask_proposals.append(proposals[img_id][pos])
         pos_matched_idxs.append(matched_idxs[img_id][pos])
 
-    mask_features = model.roi_heads.mask_roi_pool(features, mask_proposals, image_shapes)
+    mask_features = model.roi_heads.mask_roi_pool(
+        features, mask_proposals, image_shapes
+    )
     mask_features = model.roi_heads.mask_head(mask_features)
     mask_logits = model.roi_heads.mask_predictor(mask_features)
     gt_masks = [t["masks"] for t in targets]
     gt_labels = [t["labels"] for t in targets]
-    rcnn_loss_mask = model.roi_heads.maskrcnn_loss(mask_logits, mask_proposals, gt_masks, gt_labels, pos_matched_idxs)
+    rcnn_loss_mask = maskrcnn_loss(
+        mask_logits, mask_proposals, gt_masks, gt_labels, pos_matched_idxs
+    )
     loss_mask = {"loss_mask": rcnn_loss_mask}
     detector_losses.update(loss_mask)
     # ---------------------------------------------
 
-    mask_features = model.roi_heads.mask_roi_pool(features, mask_proposals_val, image_shapes)
+    mask_features = model.roi_heads.mask_roi_pool(
+        features, mask_proposals_val, image_shapes
+    )
     mask_features = model.roi_heads.mask_head(mask_features)
     mask_logits = model.roi_heads.mask_predictor(mask_features)
 
     labels = [r["labels"] for r in result]
-    masks_probs = model.roi_heads.maskrcnn_inference(mask_logits, labels)
+    masks_probs = maskrcnn_inference(mask_logits, labels)
     for mask_prob, r in zip(masks_probs, result):
         r["masks"] = mask_prob
-    
+
     detections = result
     detections = model.transform.postprocess(detections, images.image_sizes, original_image_sizes)  # type: ignore[operator]
     model.rpn.training = False
@@ -495,7 +535,7 @@ class ModelFactory:
         """
         if model_name == "maskrcnn_swin_t_fpn":
             backbone = _swin_fpn_extractor(
-                trainable_layers=3, norm_layer=nn.BatchNorm2d
+                trainable_layers=4, norm_layer=nn.BatchNorm2d
             )
 
             # RPN setting
@@ -505,12 +545,10 @@ class ModelFactory:
                     8,
                     16,
                     32,
-                    64,
-                    128,
-                    256,
-                    512,
                 ),
-            ) * 3
+                (16, 32, 64, 128),
+                (64, 128, 256, 512),
+            )
             aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
             anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
 
@@ -519,53 +557,69 @@ class ModelFactory:
                 featmap_names=["0", "1", "2", "3"], output_size=7, sampling_ratio=2
             )
             out_channels = backbone.out_channels
-            resolution = box_roi_pool.output_size[0]
             representation_size = 1024
-            box_head = CustomTwoMLPHead(
-                in_channels=out_channels * resolution**2,
-                representation_size=representation_size,
+
+            box_head = FastRCNNConvFCHead(
+                (out_channels, 7, 7),
+                [256, 256, 256, 256],
+                [representation_size],
+                norm_layer=nn.BatchNorm2d,
             )
-            box_predictor = DecoupledFasterRCNNPredictor(
+            mask_head = CustomMaskRCNNHeads(
+                out_channels, [256, 256, 256, 256], 1, norm_layer=nn.BatchNorm2d
+            )
+
+            box_predictor = FastRCNNPredictor(
                 in_channels=representation_size, num_classes=num_classes
             )
+            mask_predictor = MaskRCNNPredictor(256, 256, num_classes)
 
             model = MaskRCNN(
                 backbone,
-                num_classes=num_classes,
                 # RPN
                 rpn_anchor_generator=anchor_generator,
-                # # ROI
-                # box_roi_pool=box_roi_pool,
-                # box_head=box_head,
-                # box_predictor=box_predictor,
+                # ROI
+                box_roi_pool=box_roi_pool,
+                box_head=box_head,
+                box_predictor=box_predictor,
+                # Mask
+                mask_head=mask_head,
+                mask_predictor=mask_predictor,
             )
 
-            # model.roi_heads = GIoURoIHeads(
-            #     box_roi_pool=model.roi_heads.box_roi_pool,
-            #     box_head=model.roi_heads.box_head,
-            #     box_predictor=model.roi_heads.box_predictor,
-            #     fg_iou_thresh=0.5,
-            #     bg_iou_thresh=0.5,
-            #     batch_size_per_image=512,
-            #     positive_fraction=0.25,
-            #     bbox_reg_weights=None,
-            #     score_thresh=0.05,
-            #     nms_thresh=0.5,
-            #     detections_per_img=100,
-            # )
+            model.roi_heads = CustomRoIHeads(
+                box_roi_pool=model.roi_heads.box_roi_pool,
+                box_head=model.roi_heads.box_head,
+                box_predictor=model.roi_heads.box_predictor,
+                mask_roi_pool=model.roi_heads.mask_roi_pool,
+                mask_head=model.roi_heads.mask_head,
+                mask_predictor=model.roi_heads.mask_predictor,
+                fg_iou_thresh=0.5,
+                bg_iou_thresh=0.5,
+                batch_size_per_image=512,
+                positive_fraction=0.25,
+                bbox_reg_weights=None,
+                score_thresh=0.05,
+                nms_thresh=0.5,
+                detections_per_img=500,
+            )
 
         elif model_name in ["maskrcnn_resnet50_fpn", "maskrcnn_resnet50_fpn_v2"]:
             if model_name == "maskrcnn_resnet50_fpn":
                 base_model = maskrcnn_resnet50_fpn(
                     weights="DEFAULT" if pretrained else None,
-                    weights_backbone=ResNet50_Weights.IMAGENET1K_V1 if pretrained else None,
+                    weights_backbone=ResNet50_Weights.IMAGENET1K_V1
+                    if pretrained
+                    else None,
                     trainable_backbone_layers=3,
                 )
 
             elif model_name == "maskrcnn_resnet50_fpn_v2":
                 base_model = maskrcnn_resnet50_fpn_v2(
                     weights="DEFAULT" if pretrained else None,
-                    weights_backbone=ResNet50_Weights.IMAGENET1K_V1 if pretrained else None,
+                    weights_backbone=ResNet50_Weights.IMAGENET1K_V1
+                    if pretrained
+                    else None,
                     trainable_backbone_layers=3,
                 )
 
@@ -664,7 +718,6 @@ class ModelTrainer:
             mask_loss / len(data_loader),
             lr,
         )
-        
 
     def eval_one_epoch(self, data_loader, epoch, json_path, writer):
         """
@@ -679,6 +732,12 @@ class ModelTrainer:
         self.model.eval()
         pbar = tqdm(data_loader, ncols=120, desc=f"Epoch {epoch}", unit="batch")
         pred_list = []
+        total_loss = 0
+        obj_loss = 0
+        rpn_loss = 0
+        cls_loss = 0
+        box_loss = 0
+        mask_loss = 0
 
         with torch.no_grad():
             for img, img_id, target in pbar:
@@ -686,16 +745,20 @@ class ModelTrainer:
                 img = [imgi.to(self.device) for imgi in img]
                 target = [{k: v.to(self.device) for k, v in t.items()} for t in target]
 
-                # output = eval_forward(self.model, img, target)
-                output = self.model(img)
-                # box, scores, labels
+                loss_dict, output = eval_forward(self.model, img, target)
+                # output = self.model(img)
+
+                # calculate loss
+                losses = sum(loss for loss in loss_dict.values())
+                total_loss += losses.item()
+
+                obj_loss += loss_dict["loss_objectness"].item()
+                rpn_loss += loss_dict["loss_rpn_box_reg"].item()
+                cls_loss += loss_dict["loss_classifier"].item()
+                box_loss += loss_dict["loss_box_reg"].item()
+                mask_loss = loss_dict["loss_mask"].item()
 
                 for i in range(len(img)):
-                    # if img_id[i] < 10:
-                    #     draw = True
-                    #     draw_pred = []
-                    # else:
-                    #     draw = False
 
                     for j in range(len(output[i]["boxes"])):
                         x_min, y_min, x_max, y_max = output[i]["boxes"][j].tolist()
@@ -716,22 +779,6 @@ class ModelTrainer:
                             }
                         )
 
-                            # # Use to draw on tensorboard
-                            # if draw:
-                            #     draw_pred.append(
-                            #         {
-                            #             "bbox": [x_min, y_min, x_max, y_max],
-                            #             "category_id": class_id,
-                            #             "score": score,
-                            #         }
-                            #     )
-
-                    # # Draw on tensorboard
-                    # if draw:
-                    #     visualize_predictions(
-                    #         img[i], img_id[i], target[i], draw_pred, writer, epoch
-                    #     )
-
         # Transform to DataFrame and save as json
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(pred_list, f, indent=4)
@@ -743,10 +790,17 @@ class ModelTrainer:
         # Update scheduler
         self.scheduler.step(mAP)
 
-        return mAP
+        return (
+            total_loss / len(data_loader),
+            obj_loss / len(data_loader),
+            rpn_loss / len(data_loader),
+            cls_loss / len(data_loader),
+            box_loss / len(data_loader),
+            mask_loss / len(data_loader),
+            mAP,
+        )
 
-
-    def test(self, data_loader, json_path, score_threshold):
+    def test(self, data_loader, json_path):
         """
         Test the model on the test dataset and save the predictions to files.
         """
@@ -771,23 +825,19 @@ class ModelTrainer:
                     mask = output[i]["masks"][j].squeeze(0).detach().cpu().numpy()
                     binary_mask = mask > 0.5
                     rle_mask = encode_mask(binary_mask=binary_mask)
-                    if score > score_threshold:
-                        pred_list.append(
-                            {
-                                "image_id": int(img_id[i]),
-                                "bbox": [x_min, y_min, width, height],
-                                "score": score,
-                                "category_id": class_id,
-                                "segmentation": rle_mask,
-                            }
-                        )
+                    pred_list.append(
+                        {
+                            "image_id": int(img_id[i]),
+                            "bbox": [x_min, y_min, width, height],
+                            "score": score,
+                            "category_id": class_id,
+                            "segmentation": rle_mask,
+                        }
+                    )
 
         # Transform to DataFrame and save as json
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(pred_list, f, indent=4)
-        
-
-        
 
     def calculate_mAP(self, pred_file, ground_truth_file):
         """
@@ -831,15 +881,12 @@ class ModelTrainer:
             betas=(0.9, 0.96),
             weight_decay=self.weight_decay,
         )
-        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        #     optimizer, T_max=self.epochs
-        # )
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            mode='max',          # mAP is a maximization metric
+            mode="max",  # mAP is a maximization metric
             min_lr=self.min_lr,
             factor=self.factor,
-            patience=2
+            patience=2,
         )
 
         return optimizer, scheduler

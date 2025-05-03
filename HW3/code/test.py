@@ -1,8 +1,8 @@
 """
-Main script for testing a trained model on a digit recognition task.
+Main script for testing a trained model on a cell instance segmentation task.
 
 This script loads a trained model, 
-runs inference on test data, and saves the results in both JSON and CSV formats.
+runs inference on test data, and saves the results in JSON formats.
 Additionally, it zips the result files and stores them in a specified directory.
 """
 
@@ -63,7 +63,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        default="../checkpoints/model_maskrcnn_swin_t_fpn3_bs_4_epochs_50/mAP_best.pt",
+        default="../checkpoints/model/mAP_best.pt",
         help="Path to checkpoint file.",
     )
     parser.add_argument(
@@ -77,9 +77,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--num_workers", type=int, default=4, help="Number of worker")
     parser.add_argument("--bs", type=int, default=1, help="Batch size for training.")
-    parser.add_argument(
-        "--num_classes", type=int, default=5, help="Number of classes."
-    )
+    parser.add_argument("--num_classes", type=int, default=5, help="Number of classes.")
     parser.add_argument(
         "--model_name",
         type=str,
@@ -90,12 +88,6 @@ if __name__ == "__main__":
             "maskrcnn_resnet50_fpn_v2",
             "maskrcnn_swin_t_fpn",
         ],
-    )
-    parser.add_argument(
-        "--score_threshold",
-        type=float,
-        default=0.0,
-        help="Threshold for filtering detections.",
     )
 
     args = parser.parse_args()
@@ -115,9 +107,9 @@ if __name__ == "__main__":
         ]
     )
     test_dataset = utils.TestDataset(
-        data_dir=args.test_data_path, 
+        data_dir=args.test_data_path,
         json_path=args.test_json_path,
-        transform=test_transform
+        transform=test_transform,
     )
     test_loader = DataLoader(
         test_dataset,
@@ -135,9 +127,7 @@ if __name__ == "__main__":
 
     myModel.model.load_state_dict(torch.load(args.ckpt_path))
     myModel.model.to(args.device)
-    myModel.test(
-        test_loader, json_path, args.score_threshold
-    )
+    myModel.test(test_loader, json_path)
 
     # Create a zip file containing the JSON and CSV files
     zip_filename = os.path.join(save_dir, f"{model_name}.zip")
