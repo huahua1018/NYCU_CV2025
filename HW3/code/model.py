@@ -596,7 +596,7 @@ class ModelFactory:
                 bbox_reg_weights=None,
                 score_thresh=0.05,
                 nms_thresh=0.5,
-                detections_per_img=500,
+                detections_per_img=400,
             )
 
         elif model_name in ["maskrcnn_resnet50_fpn", "maskrcnn_resnet50_fpn_v2"]:
