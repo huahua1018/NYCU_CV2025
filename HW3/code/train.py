@@ -90,7 +90,7 @@ if __name__ == "__main__":
             "maskrcnn_swin_t_fpn",
         ],
     )
-    parser.add_argument("--bs", type=int, default=4, help="Batch size for training.")
+    parser.add_argument("--bs", type=int, default=2, help="Batch size for training.")
     parser.add_argument(
         "--epochs", type=int, default=50, help="Number of epochs to train."
     )
