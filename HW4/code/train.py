@@ -78,26 +78,19 @@ if __name__ == "__main__":
         "--device", type=str, default="cuda:0", help="Which device the training is on."
     )
     parser.add_argument("--num_workers", type=int, default=4, help="Number of worker")
-
-    # parser.add_argument(
-    #     "--model_name",
-    #     type=str,
-    #     default="maskrcnn_swin_t_fpn",
-    #     help="Model name.",
-    # )
     parser.add_argument("--bs", type=int, default=1, help="Batch size for training.")
     parser.add_argument(
         "--epochs", type=int, default=40, help="Number of epochs to train."
     )
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate.")
+    parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate.")
     parser.add_argument(
         "--min_lr", type=float, default=1e-6, help="Minimum learning rate."
     )
     parser.add_argument(
-        "--weight_decay", type=float, default=0.005, help="Weight decay."
+        "--weight_decay", type=float, default=1e-3, help="Weight decay."
     )
     parser.add_argument(
-        "--factor", type=float, default=0.1, help="Factor for ReduceLROnPlateau."
+        "--factor", type=float, default=0.2, help="Factor for ReduceLROnPlateau."
     )
 
     parser.add_argument(
@@ -115,7 +108,7 @@ if __name__ == "__main__":
     setup_seed(118)
 
     # create log directory for tensorboard
-    parm_dir = f"randcrop_bs_{args.bs}_epochs_{args.epochs}_wd_{args.weight_decay}"
+    parm_dir = f"crop256_bs_{args.bs}_epochs_{args.epochs}_wd_{args.weight_decay}_lr_{args.lr}_factor_{args.factor}"
     log_dir = os.path.join("runs", parm_dir)
 
     # create folder if not exists
@@ -160,6 +153,8 @@ if __name__ == "__main__":
         img_dir=args.data_path,
         json_path=args.train_json_path,
         transform=train_transform,
+        random_crop=utils.RandomCrop(crop_size=256),
+        random_flip=utils.RandomFlip(),
     )
     val_dataset = utils.TrainDataset(
         img_dir=args.data_path,
@@ -202,8 +197,16 @@ if __name__ == "__main__":
 
     for epoch in range(args.start_from_epoch + 1, args.epochs + 1):
 
-        train_loss, train_lr= myModel.train_one_epoch(train_loader, epoch)
-        val_loss, psnr = myModel.eval_one_epoch(val_loader, epoch, writer)
+        (train_loss, train_l1_loss, train_percep_loss, train_lr) = (
+            myModel.train_one_epoch(train_loader, epoch)
+        )
+
+        (
+            val_loss,
+            val_l1_loss,
+            val_percep_loss,
+            psnr,
+        ) = myModel.eval_one_epoch(val_loader, epoch, writer)
 
         # record the loss and accuracy
         train_loss_proc.append(train_loss)
@@ -213,10 +216,13 @@ if __name__ == "__main__":
         # write to tensorboard
         writer.add_scalar("Loss/train", train_loss, epoch)
         writer.add_scalar("Loss/valid", val_loss, epoch)
+        writer.add_scalar("L1 Loss/train", train_l1_loss, epoch)
+        writer.add_scalar("L1 Loss/valid", val_l1_loss, epoch)
+        writer.add_scalar("Percep Loss/train", train_percep_loss, epoch)
+        writer.add_scalar("Percep Loss/valid", val_percep_loss, epoch)
         writer.add_scalar("Learning Rate", train_lr, epoch)
         writer.add_scalar("PSNR", psnr, epoch)
         writer.add_scalars("Loss", {"train": train_loss, "valid": val_loss}, epoch)
-        
 
         # save the model
         if epoch > 10 and epoch % args.save_per_epoch == 0:
@@ -231,8 +237,6 @@ if __name__ == "__main__":
         print(
             f"epoch {epoch}: train loss: {train_loss}, valid loss: {val_loss}, valid PSNR: {psnr}"
         )
-
-        # torch.cuda.empty_cache()
 
     torch.save(myModel.model.state_dict(), f"{args.ckpt_path}/epoch_{args.epochs}.pt")
 

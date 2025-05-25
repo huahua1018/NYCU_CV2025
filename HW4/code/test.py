@@ -10,7 +10,6 @@ import random
 import argparse
 import zipfile
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import torch
 import numpy as np
@@ -60,7 +59,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        default="../checkpoints/randcrop_bs_1_epochs_40_wd_0.005/PSNR_best.pt",
+        default="../checkpoints/crop256_bs_1_epochs_40_wd_0.001_lr_0.0005_factor_0.2/PSNR_best.pt",
         help="Path to checkpoint file.",
     )
     parser.add_argument(
