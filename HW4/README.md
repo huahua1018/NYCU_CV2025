@@ -33,7 +33,7 @@ Place **hw4_realse_dataset** folder at the same level as the **code** folder.
 >├── hw4_realse_dataset / <br>
 >&nbsp; &nbsp; &nbsp; &nbsp; └── hw4_realse_dataset / <br>
 >&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ├── train  / <br>
->&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; └──test  / <br>
+>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; └── test  / <br>
 >└── README.md
 
 ## Usage
