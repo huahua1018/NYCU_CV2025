@@ -31,9 +31,9 @@ Place **hw4_realse_dataset** folder at the same level as the **code** folder.
 >project_root/ <br>
 >├── code/ <br>
 >├── hw4_realse_dataset / <br>
->    └── hw4_realse_dataset / <br>
->        ├── train  / <br>
->        └──test  / <br>
+>&nbsp; &nbsp; &nbsp; &nbsp; └── hw4_realse_dataset / <br>
+>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ├── train  / <br>
+>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; └──test  / <br>
 >└── README.md
 
 ## Usage
@@ -75,3 +75,4 @@ python test.py --test_data_path <Path to test data>  --ckpt_path <Path to checkp
 ```
 
 ## Performance snapshot
+![image](https://github.com/user-attachments/assets/6e47b499-5d71-49dd-9fce-174f8929723c)
