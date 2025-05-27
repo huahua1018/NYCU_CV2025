@@ -10,3 +10,4 @@ You can click on a folder to view the detailed content.
 ### [HW1 - Image Classification](https://github.com/huahua1018/NYCU_CV2025/tree/main/HW1)
 ### [HW2 - Digit Recognition](https://github.com/huahua1018/NYCU_CV2025/tree/main/HW2)
 ### [HW3 - Instance Segmentation](https://github.com/huahua1018/NYCU_CV2025/tree/main/HW3)
+### [HW4 - Image Restoration](https://github.com/huahua1018/NYCU_CV2025/tree/main/HW4)
